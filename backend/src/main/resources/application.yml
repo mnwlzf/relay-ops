@@ -99,16 +99,16 @@ logging:
 relay-ops:
   datasource:
     sub2-read-only:
-      enabled: ${SUB2_READONLY_DB_ENABLED:false}
-      url: ${SUB2_READONLY_DB_URL:}
-      username: ${SUB2_READONLY_DB_USERNAME:}
-      password: ${SUB2_READONLY_DB_PASSWORD:}
-      connect-timeout: ${SUB2_READONLY_DB_CONNECT_TIMEOUT:5s}
-      query-timeout: ${SUB2_READONLY_DB_QUERY_TIMEOUT:30s}
-      realtime-query-timeout: ${SUB2_READONLY_DB_REALTIME_QUERY_TIMEOUT:3s}
-      maximum-pool-size: ${SUB2_READONLY_DB_POOL_SIZE:2}
-      minimum-idle: ${SUB2_READONLY_DB_MIN_IDLE:1}
-      batch-size: ${SUB2_READONLY_DB_BATCH_SIZE:2000}
-      max-batches-per-run: ${SUB2_READONLY_DB_MAX_BATCHES_PER_RUN:20}
-      unavailable-cooldown: ${SUB2_READONLY_DB_UNAVAILABLE_COOLDOWN:30s}
-      realtime-max-rows: ${SUB2_READONLY_DB_REALTIME_MAX_ROWS:500}
+      enabled: ${SUB2API_DB_ENABLED:false}
+      url: ${SUB2API_DB_URL:}
+      username: ${SUB2API_DB_USERNAME:}
+      password: ${SUB2API_DB_PASSWORD:}
+      connect-timeout: ${SUB2API_DB_CONNECT_TIMEOUT:5s}
+      query-timeout: ${SUB2API_DB_QUERY_TIMEOUT:30s}
+      realtime-query-timeout: ${SUB2API_DB_REALTIME_QUERY_TIMEOUT:3s}
+      maximum-pool-size: ${SUB2API_DB_POOL_SIZE:2}
+      minimum-idle: ${SUB2API_DB_MIN_IDLE:1}
+      batch-size: ${SUB2API_DB_BATCH_SIZE:2000}
+      max-batches-per-run: ${SUB2API_DB_MAX_BATCHES_PER_RUN:20}
+      unavailable-cooldown: ${SUB2API_DB_UNAVAILABLE_COOLDOWN:30s}
+      realtime-max-rows: ${SUB2API_DB_REALTIME_MAX_ROWS:500}

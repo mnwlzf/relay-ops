@@ -445,19 +445,19 @@ integration.sub2db
 relay-ops:
   datasource:
     sub2-read-only:
-      enabled: false
-      url: ${SUB2_READONLY_DB_URL:}
-      username: ${SUB2_READONLY_DB_USERNAME:}
-      password: ${SUB2_READONLY_DB_PASSWORD:}
-      connect-timeout: 5s
-      query-timeout: 30s
-      realtime-query-timeout: 3s
-      maximum-pool-size: 2
-      minimum-idle: 1
-      batch-size: 2000
-      max-batches-per-run: 20
-      unavailable-cooldown: 30s
-      realtime-max-rows: 500
+      enabled: ${SUB2API_DB_ENABLED:false}
+      url: ${SUB2API_DB_URL:}
+      username: ${SUB2API_DB_USERNAME:}
+      password: ${SUB2API_DB_PASSWORD:}
+      connect-timeout: ${SUB2API_DB_CONNECT_TIMEOUT:5s}
+      query-timeout: ${SUB2API_DB_QUERY_TIMEOUT:30s}
+      realtime-query-timeout: ${SUB2API_DB_REALTIME_QUERY_TIMEOUT:3s}
+      maximum-pool-size: ${SUB2API_DB_POOL_SIZE:2}
+      minimum-idle: ${SUB2API_DB_MIN_IDLE:1}
+      batch-size: ${SUB2API_DB_BATCH_SIZE:2000}
+      max-batches-per-run: ${SUB2API_DB_MAX_BATCHES_PER_RUN:20}
+      unavailable-cooldown: ${SUB2API_DB_UNAVAILABLE_COOLDOWN:30s}
+      realtime-max-rows: ${SUB2API_DB_REALTIME_MAX_ROWS:500}
 ```
 
 配置说明：
@@ -482,10 +482,19 @@ relay-ops:
 
 外部库配置通过环境变量或本地 `.env` 注入：
 
-- `SUB2_READONLY_DB_ENABLED`
-- `SUB2_READONLY_DB_URL`
-- `SUB2_READONLY_DB_USERNAME`
-- `SUB2_READONLY_DB_PASSWORD`
+- `SUB2API_DB_ENABLED`
+- `SUB2API_DB_URL`
+- `SUB2API_DB_USERNAME`
+- `SUB2API_DB_PASSWORD`
+- `SUB2API_DB_CONNECT_TIMEOUT`
+- `SUB2API_DB_QUERY_TIMEOUT`
+- `SUB2API_DB_REALTIME_QUERY_TIMEOUT`
+- `SUB2API_DB_POOL_SIZE`
+- `SUB2API_DB_MIN_IDLE`
+- `SUB2API_DB_BATCH_SIZE`
+- `SUB2API_DB_MAX_BATCHES_PER_RUN`
+- `SUB2API_DB_UNAVAILABLE_COOLDOWN`
+- `SUB2API_DB_REALTIME_MAX_ROWS`
 
 要求：
 
