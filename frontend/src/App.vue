@@ -7,6 +7,7 @@
       </div>
       <el-menu :default-active="active" router class="menu">
         <el-menu-item index="/status">运行状态</el-menu-item>
+        <el-menu-item index="/overview">总览</el-menu-item>
         <el-menu-item index="/chat">对话</el-menu-item>
         <el-menu-item index="/collection">采集</el-menu-item>
         <el-menu-item index="/schedules">定时任务</el-menu-item>
