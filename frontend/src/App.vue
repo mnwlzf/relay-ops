@@ -8,6 +8,7 @@
       <el-menu :default-active="active" router class="menu">
         <el-menu-item index="/status">运行状态</el-menu-item>
         <el-menu-item index="/chat">对话</el-menu-item>
+        <el-menu-item index="/collection">采集</el-menu-item>
         <el-menu-item index="/schedules">定时任务</el-menu-item>
         <el-menu-item index="/personas">人设与提示词</el-menu-item>
         <el-menu-item index="/blueprints">消息蓝图</el-menu-item>

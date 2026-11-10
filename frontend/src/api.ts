@@ -31,6 +31,12 @@ export const api = {
   blueprints: () => http.get('/assistant/blueprints'),
   blueprintPreview: (id: number, body: unknown) => http.post(`/assistant/blueprints/${id}/preview`, body),
 
+  platforms: () => http.get('/upstream/platforms'),
+  upstreamAccounts: () => http.get('/upstream/accounts'),
+  createUpstreamAccount: (body: unknown) => http.post('/upstream/accounts', body),
+  collectNow: () => http.post('/upstream/collect'),
+  snapshots: (id: number) => http.get('/upstream/accounts/' + id + '/snapshots'),
+  collectRuns: () => http.get('/upstream/runs'),
   memoryFacts: (params: unknown) => http.get('/assistant/memory/facts', { params }),
   recall: (body: unknown) => http.post('/assistant/memory/recall', body),
   remember: (body: unknown) => http.post('/assistant/memory/facts', body)
