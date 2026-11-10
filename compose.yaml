@@ -2,7 +2,8 @@ name: relay-ops
 
 services:
   postgres:
-    image: postgres:17-alpine
+    # pgvector image: assistant memory needs the vector extension (see docs/refactor-scheduling-and-assistant.md 3.4).
+    image: pgvector/pgvector:pg17
     environment:
       POSTGRES_DB: relay_ops
       POSTGRES_USER: relay_ops

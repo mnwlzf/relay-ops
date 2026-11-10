@@ -91,6 +91,12 @@
             <artifactId>spring-boot-starter-mail</artifactId>
         </dependency>
 
+        <!-- Durable scheduling: Quartz with JDBC job store (tables managed by Flyway) -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-quartz</artifactId>
+        </dependency>
+
         <!-- Optional AI assistant. Disabled through spring.ai.model.chat=none by default. -->
         <dependency>
             <groupId>org.springframework.ai</groupId>

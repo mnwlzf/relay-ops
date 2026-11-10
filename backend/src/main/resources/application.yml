@@ -63,6 +63,25 @@ spring:
           model: ${SPRING_AI_OPENAI_MODEL:gpt-4o-mini}
           temperature: ${SPRING_AI_OPENAI_TEMPERATURE:0.2}
 
+  # Quartz persists triggers in the application database (tables created by Flyway).
+  # Keep initialize-schema=never: Flyway owns the schema.
+  quartz:
+    scheduler-name: relay-ops
+    auto-startup: true
+    wait-for-jobs-to-complete-on-shutdown: true
+    overwrite-existing-jobs: false
+    job-store-type: jdbc
+    jdbc:
+      initialize-schema: never
+    properties:
+      org.quartz.scheduler.instanceId: AUTO
+      org.quartz.threadPool.threadCount: ${RELAY_OPS_SCHEDULING_THREADS:10}
+      org.quartz.jobStore.isClustered: true
+      org.quartz.jobStore.clusterCheckinInterval: 15000
+      org.quartz.jobStore.acquireTriggersWithinLock: true
+      org.quartz.jobStore.misfireThreshold: 60000
+      org.quartz.jobStore.selectWithLockSQL: SELECT * FROM {0}LOCKS WHERE SCHED_NAME = {1} AND LOCK_NAME = ? FOR UPDATE
+
 mybatis-plus:
   mapper-locations: classpath*:/mapper/**/*.xml
   type-handlers-package: com.relayops.infrastructure.persistence.mybatis.handler
@@ -97,6 +116,24 @@ logging:
 # Optional Sub2API read-only database. The main application database remains
 # spring.datasource and is the only source used by MyBatis-Plus and Flyway.
 relay-ops:
+  scheduling:
+    enabled: ${RELAY_OPS_SCHEDULING_ENABLED:true}
+    zone: ${RELAY_OPS_SCHEDULING_ZONE:Asia/Shanghai}
+    default-calendar: ${RELAY_OPS_SCHEDULING_CALENDAR:cn-official}
+    execution-timeout: ${RELAY_OPS_SCHEDULING_EXECUTION_TIMEOUT:5m}
+    silent-alert-grace: ${RELAY_OPS_SCHEDULING_SILENT_GRACE:15m}
+    preview-count: ${RELAY_OPS_SCHEDULING_PREVIEW_COUNT:10}
+    shift-horizon-days: ${RELAY_OPS_SCHEDULING_SHIFT_HORIZON_DAYS:30}
+  ai:
+    embedding:
+      enabled: ${BAILIAN_EMBEDDING_ENABLED:true}
+      base-url: ${BAILIAN_BASE_URL:https://dashscope.aliyuncs.com/compatible-mode/v1}
+      workspace-id: ${BAILIAN_WORKSPACE_ID:}
+      api-key: ${DASHSCOPE_API_KEY:}
+      model: ${BAILIAN_EMBEDDING_MODEL:text-embedding-v4}
+      dimensions: ${BAILIAN_EMBEDDING_DIMENSIONS:1024}
+      batch-size: ${BAILIAN_EMBEDDING_BATCH_SIZE:16}
+      timeout: ${BAILIAN_EMBEDDING_TIMEOUT:10s}
   datasource:
     sub2-read-only:
       enabled: ${SUB2API_DB_ENABLED:false}
