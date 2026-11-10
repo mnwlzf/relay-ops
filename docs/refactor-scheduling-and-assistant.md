@@ -1445,6 +1445,40 @@ cd backend; mvn spring-boot:run
 
 验收：`mvn test` **169 项全绿**（新增 6 项告警规则测试）。
 
+---
+
+## 24. QQ 接入（OneBot v11 / NapCat）（2026-11-10）
+
+| 部件 | 说明 |
+|---|---|
+| `integration.onebot.OneBotProperties` | 启用开关、webhook token、API 地址与 token、是否需要 @、超时；未配齐时 `usable()=false` |
+| `integration.onebot.OneBotEvent` | 解析 v11 消息事件：群/私聊、`@` 判定（CQ 码与消息段双通道）、自身消息识别、去掉 CQ 噪声 |
+| `integration.onebot.OneBotClient` | 发送 `send_group_msg` / `send_private_msg`，失败只记日志 |
+| `assistant.adapter.in.onebot.OneBotWebhookController` | 反向 HTTP 入口：常量时间比对 token、失败关闭、异常不外抛（避免 NapCat 重投） |
+| `assistant.adapter.out.onebot.RoutingMessageSender` | `@Primary` 通道路由：群作用域优先 QQ，其余回落邮件；全程记账 |
+| `compose.yaml` | 内置 `napcat` 服务（端口、数据卷、`host.docker.internal` 映射），全部参数走 `.env` |
+
+四个判断：
+
+1. **通道与协议分层**：`integration.onebot` 只做协议（事件解析、发送），
+   `assistant.adapter.in.onebot` 决定"回不回、回什么"。放在一起会让 integration 依赖 assistant。
+2. **webhook 失败关闭**：token 没配或未启用直接 404/401，绝不"为了方便"放行。
+3. **异常不抛回 OneBot**：NapCat 会对非 2xx 重投同一事件，处理异常必须吞掉并记日志，
+   否则一次模型故障会变成事件风暴。
+4. **群消息默认要 @**：群里不 @ 就不回，避免刷屏；私聊不需要。
+
+部署侧：`napcat` 已进 compose，参数（`NAPCAT_ACCOUNT`、`NAPCAT_WEBUI_TOKEN`、端口）全部走 `.env`；
+`./napcat` 数据目录含登录态，已加入 `.gitignore`。唯一无法自动化的一步是首次扫码登录。
+
+验收：`mvn test` **174 项全绿**（新增 5 项事件解析测试）。
+
+### 接入待办
+
+- 群白名单与管理员判定（当前所有 @ 都回应）
+- 引用回复与图片消息（现在只处理文本）
+- 发送限流与长消息分片（QQ 单条长度有限）
+- `AccountCollectedEvent` 驱动的群内主动告警播报
+
 
 
 
