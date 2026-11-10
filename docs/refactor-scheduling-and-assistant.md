@@ -1386,6 +1386,30 @@ cd backend; mvn spring-boot:run
 
 验收：`mvn test` **158 项全绿**（新增 5 项：Sub2API 解析 4、事件发布 1）。
 
+---
+
+## 22. 监控读模型：今日消耗、异常账号与趋势（2026-11-10）
+
+| 部件 | 说明 |
+|---|---|
+| `UsageMath` | 纯函数：`used_quota` 差值算消耗，负差值（上游重置计数器）返回空而不是负数 |
+| `UsageReadStore` / `UsageReadRepository` | 只读 SQL：每个账号最新快照、当天最早快照、账号趋势、沉默/异常账号 |
+| `MonitoringService` | 组装总览（含今日消耗）、异常账号（`FAILED`/`PARTIAL`/`NEVER_COLLECTED`/`STALE`）、趋势 |
+| `MonitoringController` | `/api/v1/monitoring/{overview,abnormal,accounts/{id}/trend}` |
+| 前端「监控」页 | 合计余额/今日消耗、账号表、异常列表、趋势抽屉（6h/24h/7d） |
+
+两条关键判断：
+
+1. **今日消耗用快照差值算，不依赖上游字段**。New API 没有"今日消耗"，用当天最早与最新快照的
+   `used_quota` 差值；上游重置计数器导致负差值时返回"未知"——把负数当消耗会让报表出现负费用。
+2. **"沉默"也是异常**。账号最近一次采集超过 `RELAY_OPS_MONITORING_STALE_HOURS`（默认 2 小时）
+   即便上次成功，也会进入异常列表：采集停摆往往比采集失败更危险。
+
+一处有意的技术债：`monitoring` 目前用只读 SQL 直接查采集表，而不是走 `upstream.contract`。
+列已经限定在只读列上，行为不受影响；等 `upstream` 发布查询契约后再迁移，不改变调用方。
+
+验收：`mvn test` **163 项全绿**（新增 4 项差值计算测试），前端构建通过。
+
 
 
 
