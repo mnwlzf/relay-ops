@@ -3,7 +3,7 @@ name: relay-ops
 services:
   postgres:
     # pgvector image: assistant memory needs the vector extension (see docs/refactor-scheduling-and-assistant.md 3.4).
-    image: pgvector/pgvector:pg17
+    image: pgvector/pgvector:pg18-trixie
     environment:
       POSTGRES_DB: ${RELAY_OPS_DB_NAME:-relay_ops}
       POSTGRES_USER: ${RELAY_OPS_DB_USERNAME:-relay_ops}

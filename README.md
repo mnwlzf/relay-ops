@@ -6,7 +6,7 @@ RelayOps 是一个面向 New API、Sub2API 等中转上游的运维与监控平�
 ## 当前基础能力
 
 - Java 21 + Spring Boot 3.5.6
-- PostgreSQL 17 + Flyway
+- PostgreSQL 17/18 + pgvector + Flyway
 - MyBatis-Plus 3.5.12
 - Redis-backed HTTP Session
 - Spring Security 基线
@@ -59,6 +59,10 @@ mvn spring-boot:run
 `.env.example` 是**唯一的环境变量清单**：应用（`application.yml`）与 `docker compose` 的
 所有可调项都从这里注入，代码里不再有硬编码的端口、连接串、线程数或超时。
 新增配置项时同步补进 `.env.example`，`ConfigurationReferenceTest` 会在 CI 里检查是否漏登记。
+
+> pgvector：`compose.yaml` 用 pgvector 官方镜像（当前 `pgvector/pgvector:pg18-trixie`），
+> `V4__vector_extension.sql` 会建 `vector` 扩展。连外部 PostgreSQL 且应用账号不是超级用户时，
+> 需要 DBA 先用超级用户执行一次 `CREATE EXTENSION vector;`，否则 V4 会因权限不足失败。
 
 健康检查：
 
