@@ -1339,6 +1339,34 @@ cd backend; mvn spring-boot:run
 - 真实投递：`LoggingMessageSender` → `NotificationPort`（邮件已有依赖，QQ 依赖 OneBot 客户端）
 - `memory_policy` 按群开关召回
 
+---
+
+## 20. 采集闭环（2026-11-10）
+
+| 部件 | 说明 |
+|---|---|
+| `V7__upstream_collection.sql` | 平台、账号（凭证密文）、快照、采集运行四张表；种一个停用的演示平台与"全量账号采集" CRON 任务 |
+| `CredentialCipher` | AES-GCM，密钥来自 `RELAY_OPS_CREDENTIAL_KEY`；无密钥时应用照常启动，但保存凭证失败而不是明文落库 |
+| `UpstreamClient` / `NewApiUpstreamClient` | 采集端口 + New API 实现（`GET /api/user/self`，同时带 `Authorization` 与 `New-Api-User`） |
+| `UpstreamStore` / `UpstreamRepository` | 显式 SQL：平台与账号 CRUD、快照与运行记录追加、账号状态回写 |
+| `CollectionService` | 逐账号采集：解密凭证 → 调客户端 → 写快照与账号状态；单账号失败不中断整轮，并汇总到运行记录 |
+| `CollectAllAccountsTaskHandler` | 任务类型 `upstream.collect-all`，由 M1 的调度器按 CRON 触发 |
+| API / 页面 | `/api/v1/upstream/*`：平台、账号、立即采集、快照、运行记录；前端新增「采集」页 |
+
+四条设计取舍：
+
+1. **凭证只存密文**：AES-GCM 随机 IV，接口只回 `sk****56` 形式的提示；换密钥后旧凭证按"解密失败"处理，不静默返回空。
+2. **单账号失败不影响整轮**：失败信息同时写进快照与账号行，页面能直接看出"哪个账号坏了"。
+3. **响应形状不对算 PARTIAL 而不是 FAILED**：凭证通过了但字段缺失时，保留原始 `raw` 便于回放，同时标记为部分成功。
+4. **额度单位不在这里换算**：New API 的 `quota` 按原值入库，换算属于展示层口径，避免采集层埋业务假设。
+
+### 采集相关待办
+
+- `Sub2API` 采集客户端（当前会明确返回"暂不支持采集该平台类型"）
+- New API 额度单位换算与"今日消耗"推算（需要历史快照，属 `monitoring` 模块）
+- 采集完成后发布 `AccountCollectedEvent`，驱动看板与告警（事件契约已存在）
+- 采集并发度控制（当前串行；账号多时按 `RELAY_OPS_COLLECT_CONCURRENCY` 分批）
+
 
 
 
