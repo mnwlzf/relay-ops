@@ -1479,6 +1479,27 @@ cd backend; mvn spring-boot:run
 - 发送限流与长消息分片（QQ 单条长度有限）
 - `AccountCollectedEvent` 驱动的群内主动告警播报
 
+---
+
+## 25. 群准入与告警推群（2026-11-10）
+
+| 部件 | 说明 |
+|---|---|
+| `OneBotAccessPolicy` | 群白名单（空=不限制，配置后严格校验）+ QQ 管理员名单；私聊始终放行 |
+| `OneBotWebhookController` | 非白名单群直接 403；管理员身份注入 `ChatService`，群里也能查平台数据 |
+| `AlertRaisedEvent` | `notification.contract.event` 新增事件，告警发出后发布 |
+| `QqAlertListener` | `assistant` 侧监听事件 → 推送到 `RELAY_OPS_ONEBOT_ALERT_GROUPS` |
+
+三个判断：
+
+1. **准入与身份分开**：群白名单决定"回不回"，QQ 管理员名单决定"能不能查平台数据"，两者独立配置。
+2. **告警走事件而不是直接调用**：`notification` 不认识 QQ，`assistant` 监听事件推送，
+   依赖方向保持 `assistant → notification.contract`。
+3. **推送目标与接话目标分开**：`ALERT_GROUPS` 只收告警，不需要在群里 @ 机器人；
+   避免把运维告警和闲聊群混在一起。
+
+验收：`mvn test` **179 项全绿**（新增 5 项准入策略测试）。
+
 
 
 
