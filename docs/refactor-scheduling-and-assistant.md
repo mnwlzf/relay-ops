@@ -1410,6 +1410,41 @@ cd backend; mvn spring-boot:run
 
 验收：`mvn test` **163 项全绿**（新增 4 项差值计算测试），前端构建通过。
 
+---
+
+## 23. 告警与真实播报（2026-11-10）
+
+### 告警（`notification`）
+
+| 部件 | 说明 |
+|---|---|
+| `V8` 迁移 | `notification_alert_state`（按账号+类型记冷却）、`notification.alerts` CRON 任务、`platform.daily` 播报蓝图 |
+| `AlertRules` | 纯函数：余额低于阈值 / 采集失败 / 采集沉默（含"从未采集"），按类型独立冷却 |
+| `AlertService` + `AlertTaskHandler` | 每 15 分钟扫一次，读 `MonitoringQueryPort.accounts()`，发送后记冷却状态 |
+| `MailNotificationAdapter` | 用 `JavaMailSenderImpl` 自行组装（不依赖 `spring.mail.*`），未配置时只记日志、不阻塞调用方 |
+
+四条判断：
+
+1. **告警在调度器里跑，不挂在采集流程上**：告警风暴不该拖慢或搞挂采集；同一轮扫描还能发现"根本没在采集"的账号。
+2. **冷却按类型独立**：余额低的账号仍在采集失败时，两类告警互不抑制。
+3. **邮件失败只降级为日志**：通知失败不能让采集/告警任务失败。
+4. **"从未采集"归入沉默**：新账号加进来没跑过，也应该被告警提醒，而不是安静地一直空着。
+
+### 真实播报（`copilot` + `assistant`）
+
+| 部件 | 说明 |
+|---|---|
+| `PlatformCapabilityPack` | `platform.overview` / `platform.abnormal` 两个只读工具，走 `MonitoringQueryPort`，不碰 monitoring 表 |
+| `MonitoringQueryPort.accounts()` | 跨模块只读契约：账号 + 最新快照 + 状态 |
+| `EmailMessageSender` | `@Primary` 的 `MessageSender`：先经 `NotificationPort` 发邮件，再交给 `LoggingMessageSender` 记账 |
+| `platform.daily` 蓝图 | 文本 + 两个平台工具，可用 `/report platform.daily` 或定时任务播报 |
+
+一处边界修正：`EmailMessageSender` 最初写在 `notification` 里，但它要依赖 `assistant` 的 `MessageSender`，
+而规则禁止业务模块依赖 `assistant`。最终放在 `assistant/adapter/out/mail`，只依赖 `notification.contract` ——
+通道归 `assistant`，投递归 `notification`，依赖方向才对。
+
+验收：`mvn test` **169 项全绿**（新增 6 项告警规则测试）。
+
 
 
 
