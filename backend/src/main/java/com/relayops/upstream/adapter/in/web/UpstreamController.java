@@ -85,6 +85,12 @@ public class UpstreamController {
         return ApiResponse.of(store.recentRuns(limit));
     }
 
+    /** Latest snapshot per enabled account, ordered by balance: the first dashboard view. */
+    @GetMapping("/dashboard")
+    public ApiResponse<List<UpstreamStore.DashboardRow>> dashboard(@RequestParam(defaultValue = "50") int limit) {
+        return ApiResponse.of(store.dashboard(limit));
+    }
+
     private static String trimSlash(String url) {
         if (url == null || url.isBlank()) {
             throw new BusinessException("PLATFORM_INVALID", "平台 baseUrl 不能为空");

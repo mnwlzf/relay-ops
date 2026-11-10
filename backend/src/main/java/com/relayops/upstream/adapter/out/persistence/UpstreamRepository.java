@@ -185,6 +185,33 @@ public class UpstreamRepository implements UpstreamStore {
                 rs.getString("message")));
     }
 
+    @Override
+    public List<DashboardRow> dashboard(int limit) {
+        return jdbc.query("""
+                select a.id as account_id, a.name as account_name,
+                       p.code as platform_code, p.type as platform_type,
+                       s.balance, s.used_quota, s.request_count, s.status, s.collected_at, s.message
+                  from upstream_account a
+                  join upstream_platform p on p.id = a.platform_id
+                  left join lateral (
+                        select * from upstream_account_snapshot x
+                         where x.account_id = a.id
+                         order by x.collected_at desc
+                         limit 1
+                  ) s on true
+                 where a.enabled = true
+                 order by s.balance desc nulls last, a.id
+                 limit :limit
+                """, new MapSqlParameterSource("limit", Math.max(1, limit)), (rs, rowNum) -> new DashboardRow(
+                rs.getLong("account_id"), rs.getString("account_name"),
+                rs.getString("platform_code"), PlatformType.valueOf(rs.getString("platform_type")),
+                rs.getBigDecimal("balance"), rs.getBigDecimal("used_quota"),
+                rs.getObject("request_count") == null ? null : rs.getLong("request_count"),
+                statusOrNull(rs.getString("status")),
+                toInstant(rs.getObject("collected_at", OffsetDateTime.class)),
+                rs.getString("message")));
+    }
+
     private long insert(String sql, MapSqlParameterSource params) {
         KeyHolder keys = new GeneratedKeyHolder();
         jdbc.update(sql, params, keys, new String[]{"id"});

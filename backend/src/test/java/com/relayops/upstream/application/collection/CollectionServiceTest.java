@@ -33,7 +33,7 @@ class CollectionServiceTest {
     }
 
     private static CollectionService service(FakeStore store, UpstreamClient... clients) {
-        return new CollectionService(store, CIPHER, List.of(clients), TIME);
+        return new CollectionService(store, CIPHER, List.of(clients), TIME, event -> { });
     }
 
     private static UpstreamClient okClient() {
@@ -121,12 +121,27 @@ class CollectionServiceTest {
         FakeStore store = new FakeStore();
         store.accounts.add(account(1, PlatformType.NEWAPI, true));
         CollectionService service = new CollectionService(store, new CredentialCipher(""),
-                List.of(okClient()), TIME);
+                List.of(okClient()), TIME, event -> { });
 
         CollectionService.Summary summary = service.collectAll("MANUAL");
 
         assertThat(summary.failed()).isEqualTo(1);
         assertThat(store.snapshots.get(0).message()).contains("RELAY_OPS_CREDENTIAL_KEY");
+    }
+
+    @Test
+    void publishesCollectedEventForUsableSnapshots() {
+        FakeStore store = new FakeStore();
+        store.accounts.add(account(1, PlatformType.NEWAPI, true));
+        List<Object> published = new ArrayList<>();
+        CollectionService service = new CollectionService(store, CIPHER, List.of(okClient()), TIME,
+                published::add);
+
+        service.collectAll("MANUAL");
+
+        assertThat(published).hasSize(1);
+        assertThat(published.get(0)).isInstanceOf(
+                com.relayops.upstream.contract.event.AccountCollectedEvent.class);
     }
 
     private static final class FakeStore implements UpstreamStore {
@@ -196,6 +211,11 @@ class CollectionServiceTest {
 
         @Override
         public List<RunRow> recentRuns(int limit) {
+            return List.of();
+        }
+
+        @Override
+        public List<DashboardRow> dashboard(int limit) {
             return List.of();
         }
     }

@@ -27,13 +27,16 @@ public class CollectionService {
     private final CredentialCipher cipher;
     private final List<UpstreamClient> clients;
     private final BusinessTime time;
+    private final org.springframework.context.ApplicationEventPublisher events;
 
     public CollectionService(UpstreamStore store, CredentialCipher cipher,
-                             List<UpstreamClient> clients, BusinessTime time) {
+                             List<UpstreamClient> clients, BusinessTime time,
+                             org.springframework.context.ApplicationEventPublisher events) {
         this.store = store;
         this.cipher = cipher;
         this.clients = List.copyOf(clients);
         this.time = time;
+        this.events = events;
     }
 
     public Summary collectAll(String triggerSource) {
@@ -49,6 +52,7 @@ public class CollectionService {
                     snapshot.message());
             if (snapshot.usable()) {
                 succeeded++;
+                publishCollected(account, snapshot);
             } else if (snapshot.status() != CollectStatus.SKIPPED) {
                 failed++;
             }
@@ -57,6 +61,16 @@ public class CollectionService {
         log.info("采集完成: runId={}, total={}, succeeded={}, failed={}",
                 runId, accounts.size(), succeeded, failed);
         return new Summary(runId, accounts.size(), succeeded, failed);
+    }
+
+    /** Consumers of AccountCollectedEvent (dashboards, alerts) must not break collection. */
+    private void publishCollected(UpstreamAccount account, AccountSnapshot snapshot) {
+        try {
+            events.publishEvent(new com.relayops.upstream.contract.event.AccountCollectedEvent(
+                    account.platformId(), account.id(), snapshot.collectedAt()));
+        } catch (RuntimeException ex) {
+            log.warn("发布采集事件失败: account={}, reason={}", account.id(), ex.getMessage());
+        }
     }
 
     public AccountSnapshot collectOne(UpstreamAccount account) {

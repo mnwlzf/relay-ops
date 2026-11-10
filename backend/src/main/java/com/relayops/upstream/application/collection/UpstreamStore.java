@@ -4,6 +4,7 @@ import com.relayops.upstream.domain.AccountSnapshot;
 import com.relayops.upstream.domain.CollectStatus;
 import com.relayops.upstream.domain.PlatformType;
 import com.relayops.upstream.domain.UpstreamAccount;
+import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
@@ -36,6 +37,9 @@ public interface UpstreamStore {
 
     List<RunRow> recentRuns(int limit);
 
+    /** Accounts joined with their latest snapshot, ordered by balance desc (nulls last). */
+    List<DashboardRow> dashboard(int limit);
+
     /** Platform row. */
     record PlatformRow(Long id, String code, String name, PlatformType type, String baseUrl, boolean enabled) {
     }
@@ -43,5 +47,11 @@ public interface UpstreamStore {
     /** Collection run row. */
     record RunRow(Long id, String triggerSource, Instant startedAt, Instant finishedAt,
                   int total, int succeeded, int failed, String message) {
+    }
+
+    /** One dashboard row: account plus its most recent snapshot. */
+    record DashboardRow(Long accountId, String accountName, String platformCode, PlatformType platformType,
+                        BigDecimal balance, BigDecimal usedQuota, Long requestCount,
+                        CollectStatus status, Instant collectedAt, String message) {
     }
 }
