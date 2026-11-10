@@ -1220,10 +1220,97 @@ cd backend; mvn spring-boot:run
 
 1. 按 UTF-8 **严格解码**，非 UTF-8 直接失败；
 2. 不含替换字符 `U+FFFD`；
-3. 不含双重编码的乱码标记（`锛` / `鐨` / `鎵` 等），因为这类文件是"合法 UTF-8"，单靠解码校验发现不了。
+3. 不含双重编码的乱码标记（GBK 误读常见的 `U+951B`、`U+9428`、`U+93B5` 一类罕见字符），
+   因为这类文件是"合法 UTF-8"，单靠解码校验发现不了。
 
 顺带统一了两件事：`compose.yaml` 使用 `pgvector/pgvector:pg18-trixie`（用户本人调整），
 `V4__vector_extension.sql` 只负责 `CREATE EXTENSION IF NOT EXISTS vector;`，向量表结构随 M4 落地。
+
+---
+
+## 16. M4 第一块：事实记忆与混合召回（2026-11-10）
+
+| 部件 | 说明 |
+|---|---|
+| `V5__assistant_memory.sql` | `assistant_conversation` / `assistant_message` / `assistant_memory_summary` / `assistant_memory_fact` / `assistant_memory_embedding`；事实与向量解耦，`namespace`、`source`、`scope_type` 都有约束 |
+| `MemoryNamespace` / `FactSource` | `PLATFORM` 只对平台能力包可见；来源分 `EXPLICIT` / `DERIVED` / `LLM_EXTRACT` 三档 |
+| `MemoryGuard` | 拒绝密钥与口令、拒绝身份/权限结论、拒绝模型推断的平台事实、限长 500 字 |
+| `EmbeddingClient` / `BailianEmbeddingClient` | 百炼 `text-embedding-v4` 走 OpenAI 兼容 `/embeddings`；调用失败或维度不符一律返回空，只降召回质量、不阻断对话 |
+| `MemoryStore` / `MemoryRepository` | 端口 + 适配器：ILIKE 关键词检索、余弦距离邻居、`cast(? as vector)` 写入、`touch` 更新使用时间、过期清理 |
+| `MemoryService` | 混合召回评分 `0.45*相似度 + 0.25*关键词 + 0.20*置信度 + 0.10*时效`（30 天半衰期），命中即 `touch` |
+| API | `/api/v1/assistant/memory`：事实写入 / 列表 / 删除、召回预览（返回 `hybrid` 还是 `keyword`）、过期清理 |
+
+三条取舍：
+
+1. **向量进侧表**，维度不写进 schema；换模型只增 `model` 行，不会锁死表结构。
+2. **模型不可用是降级不是错误**：召回退回关键词模式，聊天照常进行。
+3. **身份永不入记忆**：`is_admin`、`是管理员` 之类内容写入即被拒；平台业务事实只接受代码或人工写入。
+
+一个自指的小插曲：文档里原本直接贴了乱码样例字符，结果 `TextFileEncodingTest` 把文档自己判成乱码。
+现在文档改用 Unicode 码位描述（`U+951B` 等），校验规则保持严格 —— 规则不该为"举例"让路。
+
+验收：`mvn test` **118 项全绿**（新增 10 项：写入防护 5、召回与写入 5）。
+
+### M4 剩余
+
+- 会话 / 消息 / 摘要的读写服务（表已建，主要服务 M6 的对话与播报链路）
+- 每 N 轮滚动摘要任务、过期记忆的定时清理
+- 提示词装配接入召回结果（`MEMORY` 层段落）
+
+---
+
+## 17. M4 第二块：会话摘要、维护任务与召回入提示词（2026-11-10）
+
+| 部件 | 说明 |
+|---|---|
+| `ConversationStore` / `ConversationJdbcStore` | L1/L2 读写：会话 `ensure`（`ON CONFLICT`）、消息追加（先 `for update` 锁会话再取 `max(seq)+1`，避免并发下的唯一键冲突）、最近消息、最新摘要、待摘要会话（`LATERAL` 连接） |
+| `TextSummarizer` / `ChatTextSummarizer` | 摘要端口 + 模型实现；无模型或调用失败一律返回空，只减少记忆、不阻断维护任务 |
+| `ConversationService` | 追加 user / assistant / broadcast 消息；滚动摘要把"已有摘要 + 新增对话"合并压缩，锚点记在一个 message id 上；`summarizePending` 批量处理 |
+| `MemoryMaintenanceTaskHandler` | 任务类型 `memory.maintenance`：清理过期事实 + 生成滚动摘要，params 支持 `minMessages` / `limit`；通过 M1 的调度模块注册 |
+| `PromptAssemblyService.MemoryPrompt` | 召回结果作为 `MEMORY` 层段落（会话摘要 + 长期记忆），排在人设之后 |
+
+两个实现上的选择：
+
+1. **消息表用 `JdbcTemplate` 而不是 MyBatis-Plus**。这两张表是纯追加、无实体状态，真正的逻辑是
+   `max(seq)+1` 与 `LATERAL` 连接，写成 SQL 比 ORM 映射直白；事实表仍用 MyBatis-Plus（有实体和
+   JSONB 字段）。同一模块内混用持久化方式不是洁癖问题，而是"按访问模式选工具"。
+2. **摘要锚点用 message id**，而不是时间戳或条数：补写历史消息、删除消息后仍能判断"哪些还没摘要"。
+
+一个测试暴露的真实问题：`ConversationServiceTest` 里 fake store 的 `recent()` 没有按会话过滤，
+于是"两个会话只有一个有消息"的用例把两个都摘要了 —— 假的实现同样要守契约，否则测的是假象。
+
+验收：`mvn test` **125 项全绿**（新增 7 项：会话读写 6、记忆入提示词 1）。
+
+### M4 剩余
+
+- 迁移里插入一行 `memory.maintenance` 的 CRON 任务种子（代码已就绪，缺默认调度）
+- `memory_policy` 按群开关召回（表字段已有，服务未读）
+- 召回结果接入真实对话链路（随 M7 一起）
+
+---
+
+## 18. M6 第一块：消息蓝图与 dry-run（2026-11-10）
+
+| 部件 | 说明 |
+|---|---|
+| `V6__assistant_blueprint.sql` | `assistant_blueprint`（segments/options 为 JSONB）+ 演示蓝图 `demo.daily-note` + 演示任务（默认停用） |
+| `Blueprint` / `BlueprintCodec` | 三种段：`text` / `tool` / `persona_note`；保存时校验"工具必须只读且允许调度"、工具段数不超过 `maxToolCalls` |
+| `MessageComposer` | 顺序执行段：变量替换（`{{date}}` `{{args.*}}` `{{tools.<ns>}}`）、工具调用与失败策略（`SKIP` / `DEGRADE` / `ABORT`）、无人设模型时跳过点评段 |
+| `BlueprintService` / `BlueprintController` | CRUD + `POST /{id}/preview`（dry-run，返回文本与每段状态） |
+| `BroadcastTaskHandler` | 任务类型 `assistant.broadcast`，params 支持 blueprintCode / scope / args / remember；播报内容写入会话记忆 |
+| `MessageSender` / `LoggingMessageSender` | 投递端口 + 占位实现（日志 + 最近一条快照，供页面验证渲染）；M7 换成 OneBot/邮件 |
+| 演示能力包 | `GeneralDemoCapabilityPack`：`general.clock` 与 `general.echo` 两个只读工具，只为让 dry-run 有真实结果 |
+
+三条关键约束：
+
+1. **写操作工具结构上进不了播报**：候选集来自 `ToolRegistry.schedulable()`，保存时再校验一次。
+2. **未解析的占位符保持原样**（`{{args.missing}}` 不会被替换成空串），dry-run 里能直接看到缺什么。
+3. **降级而不是失败**：工具不可用按段策略处理，整条消息仍可发出并标记 `degraded`。
+
+前端控制台（Vue 3 + Vite + Element Plus）已可用：运行状态 / 定时任务 / 人设与提示词预览 /
+消息蓝图 dry-run / 记忆。本地需 `RELAY_OPS_DEV_OPEN_API=true` 放行 `/api/**`（生产必须关闭）。
+
+验收：后端 `mvn test` **130 项全绿**（新增 5 项编排测试）；前端 `npm run build` 通过。
 
 
 
