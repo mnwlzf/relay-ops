@@ -1539,6 +1539,29 @@ org.quartz.jobStore.useProperties: true
 
 `ApplicationYamlTest` 已加入断言，锁住上面两项 Quartz 配置，防止以后被改回去。
 
+---
+
+## 27. 一键部署：后端镜像与 compose app 服务（2026-11-10）
+
+| 部件 | 说明 |
+|---|---|
+| `backend/Dockerfile` | 多阶段：`maven:3.9-eclipse-temurin-21` 构建 → `eclipse-temurin:21-jre` 运行；非 root 用户、`JAVA_OPTS` 可配 |
+| `backend/.dockerignore` | 排除 `target/`、日志与 IDE 文件，构建上下文只有 pom + src |
+| `compose.yaml` 的 `app` | 依赖 `postgres`/`redis` 健康检查；容器内用服务名连库与 NapCat；全部开关透传 `.env` |
+| `RELAY_OPS_JAVA_OPTS` | 容器内 JVM 参数（默认 `-XX:MaxRAMPercentage=75 -XX:+UseG1GC`） |
+
+三条判断：
+
+1. **容器内地址与宿主机地址分开**：`.env` 里的 `RELAY_OPS_DB_URL=localhost` 是给本机开发用的，
+   `app` 服务显式覆盖为 `postgres:5432`；否则容器连自己的 localhost 必然失败。
+2. **不依赖构建机工具链**：镜像里完成 Maven 构建，宿主机只要有 Docker。
+3. **NapCat 的反向上报地址随部署方式变化**：全容器用 `http://app:8080/...`，
+   后端跑宿主机用 `http://host.docker.internal:8080/...`，README 两种都写了。
+
+验证状态：本机没有 Docker CLI，**镜像构建未能实跑**；但同一份产物已用 `mvn spring-boot:run`
+连真实数据库验证过启动、迁移与调度（见第 26 节）。首次在有 Docker 的机器上执行
+`docker compose up -d --build` 时，注意观察 `app` 容器日志的迁移与 Quartz 注册。
+
 
 
 

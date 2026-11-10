@@ -45,15 +45,38 @@ com.relayops
 跨模块只允许调用目标模块的 `contract`，禁止直接依赖对方的 entity、repository 或
 application service 实现。
 
-## 本地启动
+## 一键部署（全容器）
 
-要求：JDK 21、Maven 3.9+、Docker。
+要求：Docker（Compose v2）。后端镜像由 `backend/Dockerfile` 多阶段构建，不需要本机 JDK。
 
 ```powershell
 Copy-Item .env.example .env
-docker compose up -d
-cd backend
-mvn spring-boot:run
+# 打开 .env，至少确认：
+#   RELAY_OPS_DB_PASSWORD / RELAY_OPS_CREDENTIAL_KEY（账号凭证加密）
+#   RELAY_OPS_DEV_OPEN_API=true（identity 未落地前靠它访问控制台；生产务必 false）
+docker compose up -d --build
+```
+
+起来之后：
+
+| 地址 | 说明 |
+|---|---|
+| `http://localhost:8080/actuator/health` | 健康检查 |
+| `http://localhost:8080/api/...` | 管理 API（需要 `RELAY_OPS_DEV_OPEN_API=true` 或登录） |
+| `http://127.0.0.1:6099` | NapCat WebUI（`NAPCAT_WEBUI_TOKEN`） |
+
+`app` 服务内部用容器名访问依赖：数据库 `postgres:5432`、Redis `redis:6379`、OneBot `napcat:3000`，
+因此 `.env` 里给宿主机用的 `localhost` 地址不会影响容器内的连通性。
+
+## 本机开发
+
+要求：JDK 21、Maven 3.9+、Node 22、Docker。
+
+```powershell
+Copy-Item .env.example .env
+docker compose up -d postgres redis napcat   # 只起依赖，不起 app
+cd backend; mvn spring-boot:run              # 后端在宿主机 8080
+cd ..\frontend; npm run dev                  # 前端 5173，/api 代理到 8080
 ```
 
 `.env.example` 是**唯一的环境变量清单**：应用（`application.yml`）与 `docker compose` 的
@@ -106,9 +129,11 @@ docker compose up -d napcat
 #    http://127.0.0.1:6099
 # 4. WebUI → 网络配置：
 #    HTTP 服务端：0.0.0.0:3000（容器内固定，compose 已映射到宿主机 127.0.0.1:3000）
-#    反向 HTTP 上报：http://host.docker.internal:8080/api/v1/integration/onebot
-#                    Header  Authorization: Bearer <RELAY_OPS_ONEBOT_WEBHOOK_TOKEN>
-# 5. .env 设 RELAY_OPS_ONEBOT_ENABLED=true，重启后端
+#    反向 HTTP 上报地址按后端部署方式二选一：
+#      全容器（app 也在 compose 里）：http://app:8080/api/v1/integration/onebot
+#      后端跑在宿主机：              http://host.docker.internal:8080/api/v1/integration/onebot
+#    Header  Authorization: Bearer <RELAY_OPS_ONEBOT_WEBHOOK_TOKEN>
+# 5. .env 设 RELAY_OPS_ONEBOT_ENABLED=true，重启后端（全容器模式会随 app 容器重建）
 ```
 
 要点：
