@@ -1,6 +1,7 @@
 package com.relayops.assistant.application.chat;
 
 import com.relayops.agent.contract.ScopeRef;
+import com.relayops.assistant.application.command.CommandDispatcher;
 import com.relayops.assistant.application.memory.ConversationService;
 import com.relayops.assistant.application.memory.MemoryService;
 import com.relayops.assistant.application.persona.PersonaDirectory;
@@ -32,14 +33,17 @@ public class ChatService {
     private final MemoryService memory;
     private final PromptAssemblyService promptAssembly;
     private final ChatCompletion completion;
+    private final CommandDispatcher commands;
 
     public ChatService(PersonaDirectory personas, ConversationService conversations, MemoryService memory,
-                       PromptAssemblyService promptAssembly, ChatCompletion completion) {
+                       PromptAssemblyService promptAssembly, ChatCompletion completion,
+                       CommandDispatcher commands) {
         this.personas = personas;
         this.conversations = conversations;
         this.memory = memory;
         this.promptAssembly = promptAssembly;
         this.completion = completion;
+        this.commands = commands;
     }
 
     public ChatReply chat(ChatRequest request) {
@@ -47,6 +51,13 @@ public class ChatService {
         long conversationId = conversations.ensure(request.scope(), request.packId(),
                 persona.id(), persona.version());
         conversations.appendUser(conversationId, request.userKey(), request.speakerName(), request.text());
+
+        Optional<String> command = commands.dispatch(request);
+        if (command.isPresent()) {
+            conversations.appendAssistant(conversationId, command.get());
+            return new ChatReply(command.get(), "COMMAND", 0, false, conversationId,
+                    List.of(), lastMessages(conversationId));
+        }
 
         MemoryNamespace namespace = namespaceFor(request.packId());
         MemoryService.Recalled recalled = memory.recall(namespace, request.scope(), request.text(), 5);

@@ -84,7 +84,8 @@ class ChatServiceTest {
         PromptAssemblyService assembly = new PromptAssemblyService(
                 new ToolRegistry(List.of(pack("general"), pack("platform"))));
         PersonaDirectory directory = (scope, packId) -> new StoredPersona(7L, PERSONA);
-        return new ChatService(directory, conversations, memoryService, assembly, completion);
+        return new ChatService(directory, conversations, memoryService, assembly, completion,
+                request -> Optional.empty());
     }
 
     private static ChatService.ChatRequest request(String text) {

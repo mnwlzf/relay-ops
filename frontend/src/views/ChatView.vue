@@ -11,8 +11,8 @@
         <el-option label="general" value="general" />
         <el-option label="platform" value="platform" />
       </el-select>
-      <el-input v-model="text" placeholder="说点什么…" style="flex: 1; min-width: 260px"
-                @keyup.enter="send" />
+      <el-input v-model="text" placeholder="说点什么，或试试 /help、/remember 周五不发日报、/report demo.daily-note"
+                style="flex: 1; min-width: 260px" @keyup.enter="send" />
       <el-button type="primary" :loading="sending" @click="send">发送</el-button>
     </div>
     <el-alert v-if="last && last.mode === 'UNAVAILABLE'" type="warning" :closable="false" show-icon
