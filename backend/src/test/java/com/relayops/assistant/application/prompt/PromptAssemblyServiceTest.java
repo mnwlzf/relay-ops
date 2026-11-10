@@ -14,7 +14,11 @@ import com.relayops.agent.domain.persona.PersonaCard;
 import com.relayops.agent.domain.persona.PersonaStyle;
 import com.relayops.agent.domain.prompt.PromptLayer;
 import com.relayops.agent.domain.prompt.PromptSection;
+import com.relayops.assistant.domain.memory.FactSource;
+import com.relayops.assistant.domain.memory.MemoryFact;
+import com.relayops.assistant.domain.memory.MemoryNamespace;
 import com.relayops.shared.error.BusinessException;
+import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -129,5 +133,22 @@ class PromptAssemblyServiceTest {
                 "general", persona(Set.of("general")), GROUP, false, false, null);
 
         assertThat(preview.budget()).isEqualTo(PromptAssemblyService.DEFAULT_BUDGET);
+    }
+
+    @Test
+    void memoryIsAddedAfterThePersona() {
+        PromptAssemblyService service = service(pack("general", List.of(
+                PromptSection.protectedSection("能力说明", PromptLayer.CAPABILITY, "能力规则"))));
+        MemoryFact fact = new MemoryFact(null, MemoryNamespace.GENERAL, GROUP, "preference", "缓存率",
+                "41%", 0.9, FactSource.DERIVED, Map.of(), null, null, Instant.parse("2026-11-01T00:00:00Z"));
+        PromptAssemblyService.MemoryPrompt memory =
+                new PromptAssemblyService.MemoryPrompt("上次聊到号池", List.of(fact));
+
+        String rendered = service.assemble("general", persona(Set.of("general")), GROUP, false, false, memory)
+                .render();
+
+        assertThat(rendered).contains("[会话摘要]").contains("[长期记忆]").contains("- 缓存率：41%");
+        assertThat(rendered.indexOf("[会话摘要]")).isGreaterThan(rendered.indexOf("[角色性格]"));
+        assertThat(rendered.indexOf("[长期记忆]")).isGreaterThan(rendered.indexOf("[角色性格]"));
     }
 }
