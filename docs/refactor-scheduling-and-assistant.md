@@ -1312,6 +1312,33 @@ cd backend; mvn spring-boot:run
 
 验收：后端 `mvn test` **130 项全绿**（新增 5 项编排测试）；前端 `npm run build` 通过。
 
+---
+
+## 19. M7 进行中：对话链路与确定性命令（2026-11-10）
+
+| 部件 | 说明 |
+|---|---|
+| `ChatService` | 人设 → 会话 → 记忆召回 → 提示词装配 → 模型 → 写助手消息；无模型时返回 `UNAVAILABLE` 且**不写**助手消息 |
+| `ChatCompletion` / `ModelChatCompletion` | 模型调用端口与实现，异常按"无模型"处理 |
+| `CommandDispatcher` / `CommandRouter` | `/help`、`/status`、`/remember`、`/report`；未知命令回帮助 |
+| `BlueprintRenderer` / `ServiceBlueprintRenderer` | 命令与页面 dry-run 共用同一渲染入口，保证"预览 = 播报" |
+| Web 入口 | `POST /api/v1/assistant/chat`；OneBot 入口后续复用 `ChatService` |
+
+三条约束：
+
+1. **命令优先于模型**：`/help` 这类不需要模型，配不配模型都能用；这也是模型不可用时的兜底。
+2. **`/remember` 走 `MemoryGuard`**：密钥、身份/权限结论会被拒，并把原因回给用户，而不是静默失败。
+3. **命名空间隔离有测试**：`platform` 包只召回 `PLATFORM` 事实，闲聊召回不到平台结论。
+
+验收：`mvn test` **140 项全绿**（新增 7 项命令测试）。
+
+### M7 剩余
+
+- OneBot 入口（`integration/onebot` 仍为空）：复用 `ChatService`，只需实现协议适配
+- `copilot` 平台能力包：`monitoring` / `upstream` 只有 contract，工具暂时只能返回"数据源未接入"
+- 真实投递：`LoggingMessageSender` → `NotificationPort`（邮件已有依赖，QQ 依赖 OneBot 客户端）
+- `memory_policy` 按群开关召回
+
 
 
 
