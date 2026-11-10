@@ -1500,6 +1500,45 @@ cd backend; mvn spring-boot:run
 
 验收：`mvn test` **179 项全绿**（新增 5 项准入策略测试）。
 
+---
+
+## 26. 排错：Quartz 报 `不良的类型值 long : \x`
+
+**现象**：启动后日志持续刷
+
+```text
+JobPersistenceException: Couldn't retrieve trigger: 不良的类型值 long : \x
+  at PgResultSet.getBlob → StdJDBCDelegate.getObjectFromBlob
+```
+
+**根因**：Quartz 默认的 `StdJDBCDelegate` 用 `ResultSet.getBlob()` 读 `JOB_DATA`（`bytea`），
+而 pgjdbc 的 `getBlob()` 会把内容当 OID 解析；我们写进去的是序列化字节（以 `\x` 开头的十六进制），
+于是解析失败。触发器读不出来 → misfire 处理器每分钟重试一次，形成日志风暴。
+
+**修复**（`application.yml`）：
+
+```yaml
+org.quartz.jobStore.driverDelegateClass: org.quartz.impl.jdbcjobstore.PostgreSQLDelegate
+org.quartz.jobStore.useProperties: true
+```
+
+- `PostgreSQLDelegate` 用 `getBytes()` 读 `bytea`，是 PostgreSQL 的官方搭配；
+- `useProperties: true` 让 `JobDataMap` 以字符串属性表存放（我们只有 `taskId`），
+  新写入的数据既避开 blob 路径，也能直接在表里看懂。
+
+**历史数据**：`V9__reset_quartz_state.sql` 清空 `QRTZ_*` 业务行。Quartz 表全部是派生状态
+（真实定义在 `scheduling_task`），启动时 `SchedulingBootstrap.resync()` 会按库重建，
+所以清空是安全的，也避免新旧两种格式混在一张表里。
+
+**顺带修的一处**：Hikari `idle-timeout` 默认 10 分钟大于我们设置的 `max-lifetime`（5 分钟），
+启动时会告警并禁用空闲回收；现在显式配成 `RELAY_OPS_DB_IDLE_TIMEOUT`（默认 120s）。
+
+**环境提示**：日志后半段出现 `Connection is not available / SocketTimeoutException`，
+那是到远端数据库（WAN 地址）的网络中断，不是应用缺陷；连外网数据库时建议调大
+`RELAY_OPS_DB_CONNECTION_TIMEOUT`，或在本地跑 compose 里的 PostgreSQL。
+
+`ApplicationYamlTest` 已加入断言，锁住上面两项 Quartz 配置，防止以后被改回去。
+
 
 
 

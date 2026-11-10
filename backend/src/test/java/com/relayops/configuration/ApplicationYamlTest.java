@@ -43,6 +43,21 @@ class ApplicationYamlTest {
 
         assertThat(map(relayOps, "upstream")).containsKey("credential-key");
         assertThat(map(map(relayOps, "ai"), "chat")).containsKeys("enabled", "primary", "fallback");
+
+        // Quartz + PostgreSQL: StdJDBCDelegate reads bytea via getBlob() and fails with
+        // "不良的类型值 long : \x"; PostgreSQLDelegate + string properties is the supported combo.
+        Map<String, Object> quartzProperties = map(map(root, "spring"), "quartz").entrySet().stream()
+                .filter(entry -> "properties".equals(entry.getKey()))
+                .map(entry -> (Map<String, Object>) entry.getValue())
+                .findFirst()
+                .orElseThrow();
+        assertThat(quartzProperties)
+                .containsEntry("org.quartz.jobStore.driverDelegateClass",
+                        "org.quartz.impl.jdbcjobstore.PostgreSQLDelegate")
+                .containsEntry("org.quartz.jobStore.useProperties", true);
+
+        Map<String, Object> hikari = map(map(map(root, "spring"), "datasource"), "hikari");
+        assertThat(hikari).containsKey("idle-timeout");
     }
 
     @SuppressWarnings("unchecked")

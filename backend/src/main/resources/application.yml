@@ -28,6 +28,8 @@ spring:
     hikari:
       maximum-pool-size: ${RELAY_OPS_DB_POOL_SIZE:12}
       minimum-idle: ${RELAY_OPS_DB_POOL_MIN_IDLE:2}
+      # 必须小于 max-lifetime，否则 Hikari 会告警并禁用空闲回收
+      idle-timeout: ${RELAY_OPS_DB_IDLE_TIMEOUT:120000}
       connection-timeout: ${RELAY_OPS_DB_CONNECTION_TIMEOUT:5000}
       validation-timeout: ${RELAY_OPS_DB_VALIDATION_TIMEOUT:3000}
       keepalive-time: ${RELAY_OPS_DB_KEEPALIVE_TIME:60000}
@@ -78,6 +80,12 @@ spring:
       org.quartz.scheduler.instanceId: ${RELAY_OPS_QUARTZ_INSTANCE_ID:AUTO}
       org.quartz.threadPool.threadCount: ${RELAY_OPS_SCHEDULING_THREADS:10}
       org.quartz.jobStore.isClustered: ${RELAY_OPS_QUARTZ_CLUSTERED:true}
+      # PostgreSQL 必须用 PostgreSQLDelegate：默认 StdJDBCDelegate 用 getBlob() 读 bytea，
+      # pgjdbc 会把它当 OID 解析并抛 "不良的类型值 long : \x"。
+      org.quartz.jobStore.driverDelegateClass: org.quartz.impl.jdbcjobstore.PostgreSQLDelegate
+      # JobDataMap 只存字符串（我们只有 taskId），存成属性表既能避开 bytea 读取，
+      # 也让 Quartz 表可读、可手工排查。
+      org.quartz.jobStore.useProperties: true
       org.quartz.jobStore.clusterCheckinInterval: ${RELAY_OPS_QUARTZ_CLUSTER_CHECKIN_INTERVAL:15000}
       org.quartz.jobStore.acquireTriggersWithinLock: ${RELAY_OPS_QUARTZ_ACQUIRE_TRIGGERS_WITHIN_LOCK:true}
       org.quartz.jobStore.misfireThreshold: ${RELAY_OPS_QUARTZ_MISFIRE_THRESHOLD:60000}
