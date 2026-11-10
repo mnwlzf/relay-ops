@@ -138,6 +138,21 @@ relay-ops:
   monitoring:
     # 超过该小时数未成功采集即视为沉默，进入异常账号列表
     stale-hours: ${RELAY_OPS_MONITORING_STALE_HOURS:2}
+  notification:
+    mail:
+      enabled: ${RELAY_OPS_MAIL_ENABLED:false}
+      host: ${RELAY_OPS_MAIL_HOST:}
+      port: ${RELAY_OPS_MAIL_PORT:587}
+      username: ${RELAY_OPS_MAIL_USERNAME:}
+      password: ${RELAY_OPS_MAIL_PASSWORD:}
+      from: ${RELAY_OPS_MAIL_FROM:}
+      to: ${RELAY_OPS_MAIL_TO:}
+      start-tls: ${RELAY_OPS_MAIL_START_TLS:true}
+    alerts:
+      # 余额低于该值触发告警；负数表示关闭余额告警
+      balance-threshold: ${RELAY_OPS_ALERT_BALANCE_THRESHOLD:10}
+      cooldown: ${RELAY_OPS_ALERT_COOLDOWN:6h}
+      stale-hours: ${RELAY_OPS_ALERT_STALE_HOURS:2}
   upstream:
     # 账号凭证的 AES-GCM 密钥（base64，16/24/32 字节）。留空则无法保存凭证。
     credential-key: ${RELAY_OPS_CREDENTIAL_KEY:}
