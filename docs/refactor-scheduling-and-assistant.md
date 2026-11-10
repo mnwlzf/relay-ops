@@ -1151,6 +1151,35 @@ cd backend; mvn spring-boot:run
 下一步（M3 剩余）：人设的持久化（`assistant_persona` 表）与 CRUD、提示词装配的编排服务、
 模型路由与降级；随后 M6 的消息编排复用 `ToolRegistry.schedulable()`。
 
+---
+
+## 14. M3 续：人设持久化与提示词装配（2026-11-10）
+
+| 部件 | 落点 |
+|---|---|
+| V3 迁移 | `assistant_persona`（角色卡六段 + `style`/`examples`/`address_rules`/`packs`/`version`，单一默认人设的唯一索引）、`assistant_profile`（作用域绑定，`scope_type + scope_key + pack_id` 唯一） |
+| `PersonaRepository` | 实体 ↔ `PersonaCard` 映射；四个 JSON 字段（风格、示例、称呼规则、适用能力包） |
+| `PersonaResolver` | 纯函数：精确作用域 → 全局绑定；停用、空绑定、异包绑定自动跳过 |
+| `PersonaService` | CRUD、切换唯一默认人设、作用域绑定、解析（绑定 → 默认 → 中性兜底） |
+| `PromptAssemblyService` | 安全边界（受保护）→ 能力包段落 → 人设段落；超预算从最低层裁剪 |
+| API | `/api/v1/assistant/personas` CRUD 与 `/default`、`/profiles` 绑定、`/prompt/preview` 预览 |
+
+三条设计取舍：
+
+1. **人设不含权限**。角色卡只产出 `PERSONA` 层段落；`SAFETY` 与 `CAPABILITY` 段落受保护，
+   人设写什么都没法覆盖——这正是"角色设定不改变口径"的落地点。
+2. **绑定失效不报错**。绑定指向已停用/包不匹配的人设时，解析自动回落到默认人设或中性卡，
+   线上不会因为配错人设而整条链路不可用；管理页仍能看到绑定本身。
+3. **预览即真相**。`/prompt/preview` 返回的就是发给模型的文本 + 段落结构（名称/层级/是否可覆盖/长度），
+   "人设不生效"这类争议可以当场自证。
+
+`mvn test` **100 项全绿**（新增 12 项：绑定解析 6、提示词装配 6）。
+
+### M3 仍未做
+
+- 模型路由与降级（`ModelProfile` 注册表、可用性探测、失败降级到无模型模式）
+- 会话记忆（M4）与消息编排（M6）
+
 
 
 
