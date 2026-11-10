@@ -5,15 +5,15 @@ services:
     # pgvector image: assistant memory needs the vector extension (see docs/refactor-scheduling-and-assistant.md 3.4).
     image: pgvector/pgvector:pg17
     environment:
-      POSTGRES_DB: relay_ops
-      POSTGRES_USER: relay_ops
-      POSTGRES_PASSWORD: relay_ops
+      POSTGRES_DB: ${RELAY_OPS_DB_NAME:-relay_ops}
+      POSTGRES_USER: ${RELAY_OPS_DB_USERNAME:-relay_ops}
+      POSTGRES_PASSWORD: ${RELAY_OPS_DB_PASSWORD:-relay_ops}
     ports:
-      - "5432:5432"
+      - "${RELAY_OPS_DB_PORT:-5432}:5432"
     volumes:
       - relay-ops-postgres:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U relay_ops -d relay_ops"]
+      test: ["CMD-SHELL", "pg_isready -U ${RELAY_OPS_DB_USERNAME:-relay_ops} -d ${RELAY_OPS_DB_NAME:-relay_ops}"]
       interval: 5s
       timeout: 3s
       retries: 20
@@ -22,7 +22,7 @@ services:
     image: redis:7.4-alpine
     command: ["redis-server", "--appendonly", "yes"]
     ports:
-      - "6379:6379"
+      - "${RELAY_OPS_REDIS_PORT:-6379}:6379"
     volumes:
       - relay-ops-redis:/data
     healthcheck:

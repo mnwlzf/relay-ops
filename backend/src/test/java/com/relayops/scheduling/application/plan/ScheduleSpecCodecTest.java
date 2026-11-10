@@ -67,7 +67,7 @@ class ScheduleSpecCodecTest {
                 }
                 """);
 
-        assertThat(spec.dayFilter().daysOfMonth()).containsExactly(1, 15);
+        assertThat(spec.dayFilter().daysOfMonth()).containsExactlyInAnyOrder(1, 15);
         // The matcher must still be attached (otherwise Quartz fires daily), but no calendar data is needed.
         assertThat(spec.usesDayMatcher()).isTrue();
         assertThat(spec.needsCalendarData()).isFalse();

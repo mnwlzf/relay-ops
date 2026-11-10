@@ -7,51 +7,52 @@ server:
       timeout: ${RELAY_OPS_SESSION_TIMEOUT:8h}
       cookie:
         name: ${RELAY_OPS_SESSION_COOKIE_NAME:RELAY_OPS_SESSION}
-        http-only: true
-        same-site: strict
+        http-only: ${RELAY_OPS_SESSION_COOKIE_HTTP_ONLY:true}
+        same-site: ${RELAY_OPS_SESSION_COOKIE_SAME_SITE:strict}
         secure: ${RELAY_OPS_SESSION_COOKIE_SECURE:false}
 
 spring:
   application:
-    name: relay-ops-backend
+    name: ${RELAY_OPS_APP_NAME:relay-ops-backend}
   config:
     import:
       - optional:file:.env[.properties]
       - optional:file:../.env[.properties]
   threads:
     virtual:
-      enabled: true
+      enabled: ${RELAY_OPS_VIRTUAL_THREADS:true}
   datasource:
     url: ${RELAY_OPS_DB_URL:jdbc:postgresql://localhost:5432/relay_ops}
     username: ${RELAY_OPS_DB_USERNAME:relay_ops}
     password: ${RELAY_OPS_DB_PASSWORD:relay_ops}
     hikari:
       maximum-pool-size: ${RELAY_OPS_DB_POOL_SIZE:12}
-      minimum-idle: 2
-      connection-timeout: 5000
-      validation-timeout: 3000
-      keepalive-time: 60000
-      max-lifetime: 300000
+      minimum-idle: ${RELAY_OPS_DB_POOL_MIN_IDLE:2}
+      connection-timeout: ${RELAY_OPS_DB_CONNECTION_TIMEOUT:5000}
+      validation-timeout: ${RELAY_OPS_DB_VALIDATION_TIMEOUT:3000}
+      keepalive-time: ${RELAY_OPS_DB_KEEPALIVE_TIME:60000}
+      max-lifetime: ${RELAY_OPS_DB_MAX_LIFETIME:300000}
   data:
     redis:
       host: ${RELAY_OPS_REDIS_HOST:localhost}
       port: ${RELAY_OPS_REDIS_PORT:6379}
       username: ${RELAY_OPS_REDIS_USERNAME:}
       password: ${RELAY_OPS_REDIS_PASSWORD:}
-      timeout: 3s
+      database: ${RELAY_OPS_REDIS_DATABASE:0}
+      timeout: ${RELAY_OPS_REDIS_TIMEOUT:3s}
   session:
-    store-type: redis
+    store-type: ${RELAY_OPS_SESSION_STORE:redis}
     timeout: ${RELAY_OPS_SESSION_TIMEOUT:8h}
     redis:
       namespace: ${RELAY_OPS_SESSION_NAMESPACE:relay-ops:session}
-      flush-mode: on_save
+      flush-mode: ${RELAY_OPS_SESSION_FLUSH_MODE:on_save}
   flyway:
-    enabled: true
-    locations: classpath:db/migration
-    validate-migration-naming: true
+    enabled: ${RELAY_OPS_FLYWAY_ENABLED:true}
+    locations: ${RELAY_OPS_FLYWAY_LOCATIONS:classpath:db/migration}
+    validate-migration-naming: ${RELAY_OPS_FLYWAY_VALIDATE_NAMING:true}
   jackson:
-    time-zone: Asia/Shanghai
-    default-property-inclusion: non_null
+    time-zone: ${RELAY_OPS_TIMEZONE:Asia/Shanghai}
+    default-property-inclusion: ${RELAY_OPS_JACKSON_INCLUSION:non_null}
   ai:
     model:
       chat: ${SPRING_AI_MODEL_CHAT:none}
@@ -66,25 +67,25 @@ spring:
   # Quartz persists triggers in the application database (tables created by Flyway).
   # Keep initialize-schema=never: Flyway owns the schema.
   quartz:
-    scheduler-name: relay-ops
-    auto-startup: true
-    wait-for-jobs-to-complete-on-shutdown: true
-    overwrite-existing-jobs: false
+    scheduler-name: ${RELAY_OPS_QUARTZ_SCHEDULER_NAME:relay-ops}
+    auto-startup: ${RELAY_OPS_QUARTZ_AUTO_STARTUP:true}
+    wait-for-jobs-to-complete-on-shutdown: ${RELAY_OPS_QUARTZ_WAIT_ON_SHUTDOWN:true}
+    overwrite-existing-jobs: ${RELAY_OPS_QUARTZ_OVERWRITE_JOBS:false}
     job-store-type: jdbc
     jdbc:
       initialize-schema: never
     properties:
-      org.quartz.scheduler.instanceId: AUTO
+      org.quartz.scheduler.instanceId: ${RELAY_OPS_QUARTZ_INSTANCE_ID:AUTO}
       org.quartz.threadPool.threadCount: ${RELAY_OPS_SCHEDULING_THREADS:10}
-      org.quartz.jobStore.isClustered: true
-      org.quartz.jobStore.clusterCheckinInterval: 15000
-      org.quartz.jobStore.acquireTriggersWithinLock: true
-      org.quartz.jobStore.misfireThreshold: 60000
+      org.quartz.jobStore.isClustered: ${RELAY_OPS_QUARTZ_CLUSTERED:true}
+      org.quartz.jobStore.clusterCheckinInterval: ${RELAY_OPS_QUARTZ_CLUSTER_CHECKIN_INTERVAL:15000}
+      org.quartz.jobStore.acquireTriggersWithinLock: ${RELAY_OPS_QUARTZ_ACQUIRE_TRIGGERS_WITHIN_LOCK:true}
+      org.quartz.jobStore.misfireThreshold: ${RELAY_OPS_QUARTZ_MISFIRE_THRESHOLD:60000}
       org.quartz.jobStore.selectWithLockSQL: SELECT * FROM {0}LOCKS WHERE SCHED_NAME = {1} AND LOCK_NAME = ? FOR UPDATE
 
 mybatis-plus:
-  mapper-locations: classpath*:/mapper/**/*.xml
-  type-handlers-package: com.relayops.infrastructure.persistence.mybatis.handler
+  mapper-locations: ${RELAY_OPS_MAPPER_LOCATIONS:classpath*:/mapper/**/*.xml}
+  type-handlers-package: ${RELAY_OPS_TYPE_HANDLERS_PACKAGE:com.relayops.infrastructure.persistence.mybatis.handler}
   configuration:
     map-underscore-to-camel-case: true
     cache-enabled: false
@@ -95,27 +96,32 @@ management:
   endpoints:
     web:
       exposure:
-        include: health,info,prometheus
+        include: ${RELAY_OPS_ACTUATOR_ENDPOINTS:health,info,prometheus}
   endpoint:
     health:
       probes:
-        enabled: true
+        enabled: ${RELAY_OPS_ACTUATOR_PROBES:true}
   info:
     env:
-      enabled: true
+      enabled: ${RELAY_OPS_ACTUATOR_INFO_ENV:true}
 
 info:
   app:
-    name: RelayOps
-    description: Upstream API operations platform
+    name: ${RELAY_OPS_APP_TITLE:RelayOps}
+    description: ${RELAY_OPS_APP_DESCRIPTION:Upstream API operations platform}
 
 logging:
+  level:
+    root: ${RELAY_OPS_LOG_LEVEL:INFO}
+    com.relayops: ${RELAY_OPS_APP_LOG_LEVEL:INFO}
+    org.quartz: ${RELAY_OPS_QUARTZ_LOG_LEVEL:WARN}
   pattern:
     level: "%5p [requestId:%X{requestId:-}]"
 
 # Optional Sub2API read-only database. The main application database remains
 # spring.datasource and is the only source used by MyBatis-Plus and Flyway.
 relay-ops:
+  timezone: ${RELAY_OPS_TIMEZONE:Asia/Shanghai}
   scheduling:
     enabled: ${RELAY_OPS_SCHEDULING_ENABLED:true}
     zone: ${RELAY_OPS_SCHEDULING_ZONE:Asia/Shanghai}

@@ -56,6 +56,10 @@ cd backend
 mvn spring-boot:run
 ```
 
+`.env.example` 是**唯一的环境变量清单**：应用（`application.yml`）与 `docker compose` 的
+所有可调项都从这里注入，代码里不再有硬编码的端口、连接串、线程数或超时。
+新增配置项时同步补进 `.env.example`，`ConfigurationReferenceTest` 会在 CI 里检查是否漏登记。
+
 健康检查：
 
 ```text
