@@ -72,6 +72,33 @@ http://localhost:8080/actuator/health
 
 Prometheus 指标默认要求认证；健康检查接口允许匿名访问。
 
+## 前端控制台（Vue 3 + Element Plus）
+
+```powershell
+cd frontend
+npm install
+npm run dev        # http://localhost:5173
+```
+
+Vite 把 `/api` 代理到 `http://localhost:8080`。因为 `identity` 还没落地，本地联调需要后端放行 API：
+在 `.env` 里把 `RELAY_OPS_DEV_OPEN_API` 改成 `true`（启动日志会打印 WARN 提醒，生产必须保持 `false`）。
+
+页面：运行状态（模型槽位、最近一次播报）、定时任务（启停 / 立即执行 / 未来 10 次触发）、
+人设与提示词预览、消息蓝图 dry-run、记忆（写入 / 召回预览）。
+
+构建产物：
+
+```powershell
+npm run build      # 输出到 frontend/dist
+```
+
+## 当前基础能力补充
+
+- 动态调度：Quartz JDBC JobStore + 中国工作日历（法定节假日 / 调休补班 / 每月第 N 个工作日）
+- 助手内核：提示词分层装配、角色卡、能力包 SPI、工具注册表、模型路由与降级
+- 记忆：事实记忆（写入防护 + 混合召回）、会话与滚动摘要、`memory.maintenance` 维护任务
+- 消息编排：蓝图分段（文本 / 只读工具 / 人设点评）、dry-run 预览、`assistant.broadcast` 播报任务
+
 ## 构建与测试
 
 ```powershell

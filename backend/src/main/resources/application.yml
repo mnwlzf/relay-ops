@@ -122,6 +122,10 @@ logging:
 # spring.datasource and is the only source used by MyBatis-Plus and Flyway.
 relay-ops:
   timezone: ${RELAY_OPS_TIMEZONE:Asia/Shanghai}
+  security:
+    # 仅本地开发用：identity 尚未落地时让前端能直接调 /api/**。生产必须保持 false。
+    dev-open: ${RELAY_OPS_DEV_OPEN_API:false}
+    cors-origins: ${RELAY_OPS_CORS_ORIGINS:http://localhost:5173}
   scheduling:
     enabled: ${RELAY_OPS_SCHEDULING_ENABLED:true}
     zone: ${RELAY_OPS_SCHEDULING_ZONE:Asia/Shanghai}
