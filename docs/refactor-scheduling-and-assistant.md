@@ -1091,5 +1091,66 @@ cd backend; mvn spring-boot:run
 - `CATCH_UP(n>1)` 多次补跑
 - 真实 2026/2027 日历数据本身（需要导入，代码不内置——避免用错的法定节假日数据）
 
+---
+
+## 12. 配置外置（2026-11-10）
+
+### 做法
+
+所有可调项收敛到仓库根的 `.env.example`，`application.yml` 与 `compose.yaml` 只保留
+`${VAR:default}` 引用：
+
+| 区域 | 变量前缀 | 说明 |
+|---|---|---|
+| 应用与运行时 | `RELAY_OPS_SERVER_*`、`RELAY_OPS_APP_*`、`RELAY_OPS_TIMEZONE` | 端口、时区、虚拟线程、JSON 包含策略 |
+| 会话 | `RELAY_OPS_SESSION_*` | Redis 会话、Cookie 属性、命名空间 |
+| 主库 | `RELAY_OPS_DB_*` | URL/账号/池参数；compose 用 `DB_NAME/DB_PORT` 建容器 |
+| Redis | `RELAY_OPS_REDIS_*` | 地址、库号、超时 |
+| 迁移与 ORM | `RELAY_OPS_FLYWAY_*`、`RELAY_OPS_MAPPER_*` | 关闭迁移、改位置等运维开关 |
+| 调度 | `RELAY_OPS_SCHEDULING_*`、`RELAY_OPS_QUARTZ_*` | 时区、预览条数、顺延窗口、Quartz 线程/集群/misfire |
+| 观测 | `RELAY_OPS_ACTUATOR_*`、`RELAY_OPS_LOG_LEVEL` | 暴露端点、健康探针、日志级别 |
+| 聊天模型 | `SPRING_AI_*` | OpenAI 兼容端点；`SPRING_AI_MODEL_CHAT=none` 关闭自然语言 |
+| 向量化 | `BAILIAN_*`、`DASHSCOPE_API_KEY` | 百炼 embedding（与语音共用 Key） |
+| Sub2API 只读库 | `SUB2API_DB_*` | 关闭时相关查询直接返回"未启用" |
+
+`TimeConfig` 改为读取 `relay-ops.timezone`，不再写死 `Asia/Shanghai`；`spring.jackson.time-zone`
+复用同一个变量，避免"业务时区"和"序列化时区"漂移。
+
+### 防漏登记
+
+`ConfigurationReferenceTest` 会：
+
+1. 扫描 `application.yml` 里所有 `${VAR...}`，断言 `.env.example` 有同名条目；
+2. 扫描 `compose.yaml` 里的 `${VAR:-...}`，同样断言；
+3. 检查 `.env.example` 没有重复键。
+
+这样"加了个配置项忘了写进模板"会在测试阶段失败，而不是等部署时才发现。
+
+### 验收
+
+`mvn test` **88 项全绿**（新增 3 项配置引用检查 + 16 项 agent 内核测试）。
+
+---
+
+## 13. M3 进行中：agent 内核（2026-11-10）
+
+三模块拆分的第一块：内核不依赖任何业务模块，两个能力包只通过 SPI 与它对接。
+
+| 部件 | 内容 |
+|---|---|
+| `agent.domain.prompt.PromptStack` | 分层装配：`SAFETY > CAPABILITY > PACK_STYLE > PERSONA > MEMORY > SESSION`；同名字段"受保护者胜"；超预算时从最低层开始丢弃，最高层永远保留 |
+| `agent.domain.persona.PersonaCard` | 角色卡六段（形象/性格/节奏/关系/情绪/边界）+ 风格开关 + 示例 + 关系称呼规则 + 适用能力包 + 版本；`neutral()` 作为兜底人设 |
+| `agent.domain.persona.RelationshipLevel` | `STRANGER / GROUP_MATE / FRIEND / CLOSE`，供"不要叫所有人主人"这类规则落地 |
+| `agent.contract.CapabilityPack` | 能力包 SPI：`prompt(ctx)` + `tools(ctx)` + `supports(scope)` |
+| `agent.contract.ToolSpec` | 工具元数据：副作用等级、是否可被定时消息引用、权限谓词、脱敏策略、超时、参数 Schema |
+| `agent.application.tool.ToolRegistry` | 唯一查找入口：按作用域选包 → 权限谓词过滤 → 去重（先注册者胜）→ 单独暴露"可被消息引用"的工具集 |
+
+关键约定：**工具的身份由调用方注入**（`ToolInvocation` 带 scope/userKey/admin），handler 不接受
+"查谁"的参数；权限谓词永远在内核执行，能力包与插件只能声明、不能绕过。
+
+下一步（M3 剩余）：人设的持久化（`assistant_persona` 表）与 CRUD、提示词装配的编排服务、
+模型路由与降级；随后 M6 的消息编排复用 `ToolRegistry.schedulable()`。
+
+
 
 
