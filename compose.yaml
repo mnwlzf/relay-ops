@@ -31,6 +31,24 @@ services:
       timeout: 3s
       retries: 20
 
+  # QQ 侧接入：OneBot v11 实现。首次启动需要扫码登录（无法自动化），
+  # 之后在 NapCat WebUI 里配置「HTTP 服务端(3000)」与「反向 HTTP 上报」。
+  napcat:
+    image: mlikiowa/napcat-docker:latest
+    environment:
+      NAPCAT_ACCOUNT: ${NAPCAT_ACCOUNT:-}
+      WEBUI_TOKEN: ${NAPCAT_WEBUI_TOKEN:-}
+    ports:
+      - "127.0.0.1:${NAPCAT_WEBUI_PORT:-6099}:6099"
+      - "127.0.0.1:${NAPCAT_HTTP_PORT:-3000}:3000"
+    volumes:
+      # 登录态与 NapCat 配置；含敏感数据，已在 .gitignore 中排除
+      - ./napcat:/app/napcat
+    extra_hosts:
+      # 让容器能用 host.docker.internal 访问宿主机上的后端
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped
+
 volumes:
   relay-ops-postgres:
   relay-ops-redis:

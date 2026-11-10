@@ -73,7 +73,6 @@ http://localhost:8080/actuator/health
 Prometheus 指标默认要求认证；健康检查接口允许匿名访问。
 
 ## 前端控制台（Vue 3 + Element Plus）
-
 ```powershell
 cd frontend
 npm install
@@ -91,6 +90,33 @@ Vite 把 `/api` 代理到 `http://localhost:8080`。因为 `identity` 还没落�
 ```powershell
 npm run build      # 输出到 frontend/dist
 ```
+
+## QQ 群接入（NapCat / OneBot v11）
+
+`compose.yaml` 已经带 `napcat` 服务，只需要给环境变量，其余在 NapCat WebUI 点两下：
+
+```powershell
+# 1. .env 里填（其余保持默认即可）
+#    NAPCAT_WEBUI_TOKEN=<自己定一个强口令>
+#    NAPCAT_ACCOUNT=<QQ 号，留空则首次扫码后写入>
+#    RELAY_OPS_ONEBOT_WEBHOOK_TOKEN=<自己定一个强口令>
+# 2. 起 NapCat
+docker compose up -d napcat
+# 3. 打开 WebUI（token 用上面的 NAPCAT_WEBUI_TOKEN）扫码登录
+#    http://127.0.0.1:6099
+# 4. WebUI → 网络配置：
+#    HTTP 服务端：0.0.0.0:3000（容器内固定，compose 已映射到宿主机 127.0.0.1:3000）
+#    反向 HTTP 上报：http://host.docker.internal:8080/api/v1/integration/onebot
+#                    Header  Authorization: Bearer <RELAY_OPS_ONEBOT_WEBHOOK_TOKEN>
+# 5. .env 设 RELAY_OPS_ONEBOT_ENABLED=true，重启后端
+```
+
+要点：
+
+- `napcat/` 目录存登录态与 NapCat 配置，含敏感数据，已在 `.gitignore` 中排除；
+- webhook 默认**失败关闭**：没配 token 或接口未启用时返回 404/401，不会裸奔；
+- 群里默认需要 @机器人 才响应（`RELAY_OPS_ONEBOT_REQUIRE_MENTION`），私聊不需要；
+- 机器人的播报会优先走 QQ 群（`RoutingMessageSender`），OneBot 未启用时回落邮件。
 
 ## 当前基础能力补充
 

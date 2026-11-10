@@ -77,6 +77,8 @@ uploads/
 pgdata/
 postgres-data/
 redis-data/
+# NapCat 登录态与配置（含账号数据与 token）
+napcat/
 derby.log
 
 # ---------------------------------------------------------------------------
