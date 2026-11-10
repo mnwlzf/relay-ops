@@ -4,7 +4,6 @@ import com.relayops.assistant.adapter.out.onebot.LoggingMessageSender;
 import com.relayops.assistant.application.message.MessageSender;
 import com.relayops.notification.contract.NotificationPort;
 import java.util.Map;
-import org.springframework.context.annotation.Primary;
 import org.springframework.stereotype.Component;
 
 /**
@@ -16,7 +15,6 @@ import org.springframework.stereotype.Component;
  * intact.</p>
  */
 @Component
-@Primary
 public class EmailMessageSender implements MessageSender {
 
     private final NotificationPort notifications;

@@ -153,6 +153,14 @@ relay-ops:
       balance-threshold: ${RELAY_OPS_ALERT_BALANCE_THRESHOLD:10}
       cooldown: ${RELAY_OPS_ALERT_COOLDOWN:6h}
       stale-hours: ${RELAY_OPS_ALERT_STALE_HOURS:2}
+  onebot:
+    # 未启用时 webhook 返回 404、发送只写日志；启用需要同时配置 token 与 api-base-url
+    enabled: ${RELAY_OPS_ONEBOT_ENABLED:false}
+    webhook-token: ${RELAY_OPS_ONEBOT_WEBHOOK_TOKEN:}
+    api-base-url: ${RELAY_OPS_ONEBOT_API_BASE_URL:http://localhost:3000}
+    api-token: ${RELAY_OPS_ONEBOT_API_TOKEN:}
+    group-mention-required: ${RELAY_OPS_ONEBOT_REQUIRE_MENTION:true}
+    timeout: ${RELAY_OPS_ONEBOT_TIMEOUT:5s}
   upstream:
     # 账号凭证的 AES-GCM 密钥（base64，16/24/32 字节）。留空则无法保存凭证。
     credential-key: ${RELAY_OPS_CREDENTIAL_KEY:}
