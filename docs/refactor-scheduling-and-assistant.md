@@ -1,0 +1,1095 @@
+# RelayOps 重构计划 v2：Quartz 调度 × 三模块助手 × 插件化 × 定时消息工具编排
+
+> 目标：`E:\code\relay-ops`（Spring Boot 模块化单体）
+> 参照：`E:\code\monitor`（44 个迁移、`bot` 包 130+ 文件、单字段 Cron 动态调度）
+> 本文件替代 v1；v1 的选项对比压缩进附录 A 作为"为什么选乙"的依据。
+>
+> **本版落定的决策**：路线乙 —— Quartz（JDBC JobStore）+ `agent`/`assistant`/`copilot` 三顶级模块 + pgvector 记忆；embedding 走阿里云百炼 `text-embedding-v4`（1024 维）。
+> **本版新增的三块内容**：① 大肥鱼式角色卡（角色 + 关系 + 群聊接话）；② 插件系统（自定义人设/命令/工具/玩法/模板）；③ 定时消息的"工具结果携带"编排（可选择工具、可指定参数）。
+
+---
+
+## 0. 本版与 v1 的差异
+
+| 项 | v1（甲） | v2（乙，本版） |
+|---|---|---|
+| 调度引擎 | 自研 `NextFirePlanner` + 单次注册 | **Quartz JDBC JobStore**（11 张 `QRTZ_*` 表，Flyway 管理） |
+| 中国日历 | 自研日历表 + planner 判定 | 日历表不变，但由**自定义 `org.quartz.Calendar`** 承载筛选 |
+| 模块拆分 | `assistant` 内 kernel + 双 pack | **`agent` / `assistant` / `copilot` 三个顶级模块** |
+| 记忆 | 窗口 + 摘要 + 事实（无向量） | 四层 + **pgvector（HNSW）语义召回** |
+| 人设 | 单表字段扩展 | **角色卡（结构化 6 段）+ 关系分级 + 音色 + 示例** |
+| 扩展方式 | 能力包（代码内） | 能力包（代码内）**+ 插件系统（用户自定义，声明式为主）** |
+| 定时消息 | 模板 / 报告 / AGENT 三档 | 三档 + **消息蓝图（Blueprint）：分段编排，可携带任意只读工具结果并可指定参数** |
+| 粗估 | 52–74 人日 | **96–125 人日** |
+
+---
+
+## 1. 目标架构
+
+### 1.1 模块与依赖
+
+```text
+com.relayops
+├── shared/            # 时间、错误、统一响应、脱敏基础
+├── integration/       # onebot / sub2api / sub2db 协议适配（无业务）
+├── identity/          # Web 用户、角色、QQ 绑定、访问策略
+├── upstream/          # 平台、账号、凭证、采集编排
+├── monitoring/        # 快照、看板、号池、变更、状态
+├── operations/        # 事故、自愈、诊断
+├── notification/      # 邮件 / QQ / Webhook 投递（受投递方）
+├── scheduling/        # ★ Quartz 调度：任务定义、触发、执行记录、工作日历
+│
+├── agent/             # ★ 内核：角色卡、记忆、提示词装配、模型路由、工具注册表、能力包 SPI、渲染
+├── assistant/         # ★ 通道与通用能力：OneBot/Web 接入、消息编排、通用包、归档、插件运行时
+└── copilot/           # ★ 平台能力包：查询、诊断、日报生成、播报编排
+```
+
+依赖方向（**ArchUnit 强制**）：
+
+| 模块 | 允许依赖 |
+|---|---|
+| `shared` | 无 |
+| `integration` | `shared` |
+| `scheduling` | `shared`（**只依赖自己的 contract**，不认任何业务模块） |
+| `agent` | `shared` |
+| `assistant` | `agent`、`scheduling.contract`、`notification.contract`、`identity.contract` |
+| `copilot` | `agent`、`monitoring.contract`、`upstream.contract`、`operations.contract`、`scheduling.contract` |
+| `monitoring` / `upstream` / `operations` / `notification` / `identity` | `shared`、`integration`、彼此 contract |
+
+禁止清单（写成测试）：
+
+1. 任何业务模块不得依赖 `agent` / `assistant` / `copilot`（扩展 v1 已有规则）。
+2. `assistant` 与 `copilot` **不得互相依赖**；两者只通过 `agent` 的 SPI 在运行期组装。
+3. `agent` 不得依赖 `assistant` / `copilot` / 任何业务模块（内核不许知道业务）。
+4. `copilot` 只能触达其他模块的 `contract`，不得出现 `*.adapter.*` / `*.domain.*` / `*.application.*`。
+5. 顶层模块无环。
+
+> 关键运行期机制：`assistant` 在启动时注入 `List<CapabilityPack>`（Spring 收集），`copilot` 提供 `platform` 包实现，`assistant` 提供 `general` 包实现。编译期互不相识，运行期按作用域路由。
+
+### 1.2 为什么把"接入层"放在 `assistant` 而不是新建 `gateway`
+
+OneBot 回调、Web 会话、消息编排、会话存储、插件运行时都是"消息域"的事，和"平台数据"无关。放 `assistant` 可以让 `copilot` 保持纯能力包（只声明工具和提示词），也避免第 5 个模块。代价是 `assistant` 会成为最大的模块（约 180–220 文件），必须靠 ArchUnit + 包内分层约束。
+
+### 1.3 包内分层（统一约定）
+
+```text
+<module>/
+├── contract/                  # 跨模块稳定契约（Port / 只读 record / SPI）
+├── application/<子域>/        # 用例编排
+├── domain/                    # 值对象、规则、领域事件
+└── adapter/
+    ├── in/<web|onebot>/       # 入站
+    └── out/<persistence|ai|http|onebot>/  # 出站
+```
+
+`agent` 额外有 `kernel/{prompt,persona,memory,model,tool,render}` 七个内聚子包，但它们仍属 `domain`/`application` 语义，**不引入新分层**。
+
+---
+
+## 2. 专题一：调度（Quartz 落地）
+
+### 2.1 Quartz 的能力边界（先认清两个坑）
+
+Quartz 能直接给的：
+
+- 秒级 6/7 段 Cron（`CronTrigger`），与现有 `0 */10 * * * ?` 写法一致；
+- 固定间隔（`SimpleTrigger` / `CalendarIntervalTrigger`）；
+- 一次性（`SimpleTrigger` startAt）；
+- 错过补偿（misfire 指令 + `misfireThreshold`）；
+- 并发禁止（`@DisallowConcurrentExecution`）；
+- 集群（`isClustered=true`，DB 行锁抢占，无需自研锁）；
+- 日历（`org.quartz.Calendar` + `HolidayCalendar` / `CronCalendar` / `DailyCalendar`）。
+
+两个必须自己处理的坑：
+
+1. **Quartz 日历只能"排除"，不能"追加"**。`HolidayCalendar` 只能让某些日期不触发。而中国日历需要"周末的调休补班日要触发" —— 这是"追加"。解法：**实现自定义 `org.quartz.Calendar`**，`isTimeIncluded(ts)` 直接返回"这一天是否命中我们的日规则"（调休补班 → true，法定节假日 → false），把 `MON-FRI` 的概念整个扔掉。见 2.3。
+2. **Quartz 不持久化 Calendar 对象**。`JobStore` 只保存触发器对日历名的引用，日历实例每次启动都要重新 `scheduler.addCalendar(...)`；日历数据变更后要 `addCalendar(name, cal, replace=true, updateTriggers=true)` 才能让已有触发器生效。这一条必须写进启动流程，否则"改了假期没生效"会变成疑难杂症。
+
+### 2.2 `spec` → Quartz 触发器编译
+
+统一规则：**"按日 + 时刻"型一律编译成 `0 m h * * ?`，日期筛选全部交给自定义日历**。这样表达式只有一种形态，不需要为"每月第一个工作日""第 N 个工作日"发明语法。
+
+| `spec.kind` | Quartz 触发器 | 日历 | 说明 |
+|---|---|---|---|
+| `CRON` | `CronTrigger(cron, tz)` | 无 | 技术型任务（采集、心跳），不碰日历 |
+| `INTERVAL` | `SimpleTrigger(startAt, repeatInterval, repeatCount=-1)` | 可选 | 间隔任务；带 `activeWindow` 时由日历做时段筛选 |
+| `CALENDAR_TIMES` | 每个时刻一个 `CronTrigger("0 m h * * ?")`，同一 trigger group | **必需** | 播报主力形态；多时刻 = 多触发器 |
+| `ONCE` | `SimpleTrigger(startAt, repeatCount=0)` | 可选 | 执行成功后任务自动置停用 |
+| `MONTH_NTH_WORKDAY` | `CronTrigger("0 m h * * ?")` + `NthWorkdayDayMatcher` | **必需** | 日历负责"第 N 个工作日"判定 |
+
+`spec` 终稿（与 v1 一致，仅补充 `calendarCode` 必填约束）：
+
+```jsonc
+{
+  "kind": "CALENDAR_TIMES",
+  "timezone": "Asia/Shanghai",
+  "calendarCode": "cn-official",
+  "dayFilter": { "type": "WORKDAY" },        // ALL|WORKDAY|NON_WORKDAY|WEEKDAYS|MONTH_NTH_WORKDAY|MONTH_LAST_WORKDAY|CUSTOM_DATES
+  "times": ["09:00", "18:30"],
+  "holidayPolicy": "NEXT_WORKDAY",           // SKIP|NEXT_WORKDAY|PREV_WORKDAY|FORCE
+  "activeWindow": { "from": "08:00", "to": "22:30" },
+  "pureCron": null,
+  "interval": null,
+  "once": null
+}
+```
+
+**为什么要保留 `CRON` 这个 kind**：并不是所有任务都该受假期影响。采集、号池采样必须每 10 分钟跑，节假日更不能停。把"跟随业务日历"和"绝对周期"分成两种 kind，是这套设计最重要的分界线。
+
+### 2.3 中国工作日历 = 自定义 Quartz Calendar
+
+```java
+// agent 不参与；scheduling 自己实现
+public final class WorkdayQuartzCalendar implements org.quartz.Calendar {
+
+    private final WorkdayCalendarData data;   // 从 scheduling_calendar_day 加载
+    private final DayMatcher matcher;         // 由 spec.dayFilter 构造
+
+    @Override
+    public boolean isTimeIncluded(long timestamp) {
+        LocalDate day = Instant.ofEpochMilli(timestamp).atZone(zone).toLocalDate();
+        return matcher.matches(day, data);
+    }
+
+    @Override
+    public long getNextIncludedTime(long timestamp) { /* 逐日推进，最多 400 天 */ }
+}
+```
+
+`DayMatcher` 与 `WorkdayCalendarData` 的关系：
+
+| `dayFilter.type` | 判定 |
+|---|---|
+| `ALL` | 恒真（等价"自然日"） |
+| `WORKDAY` | `day_type ∈ {WORKDAY, MAKEUP_WORKDAY}` |
+| `NON_WORKDAY` | `day_type ∈ {WEEKEND, HOLIDAY}` |
+| `WEEKDAYS` | 指定星期几（不看法定节假日） |
+| `MONTH_NTH_WORKDAY` | 当月第 N 个工作日 |
+| `MONTH_LAST_WORKDAY` | 当月最后一个工作日 |
+| `CUSTOM_DATES` | 白名单日期集合 |
+
+`day_type` 与判定顺序（与 v1 一致，此处重申为契约）：
+
+1. `MAKEUP_WORKDAY`（调休补班，周末上班）→ **算工作日**
+2. `HOLIDAY`（法定节假日）→ 不算
+3. `WORKDAY`（工作日，含被强制标为上班的周末）→ 算
+4. 未登记 → 周一至周五算工作日，周六日不算
+
+存储策略：`scheduling_calendar_day` **只存例外**（`HOLIDAY` / `MAKEUP_WORKDAY` / 强制 `WORKDAY`），未命中回落星期规则。一年约 30–40 行，导入与人工校订都轻。
+
+`holidayPolicy`（触发器被日历排除时的补偿）：
+
+| 策略 | 行为 | 实现 |
+|---|---|---|
+| `SKIP` | 跳过，下一次正常 | 纯日历筛选即可 |
+| `NEXT_WORKDAY` | 顺延到下一个工作日 | 应用层在"计划触发点被排除"时补一条 `ONCE` 触发器（`planned_at` 标记来源），用 `scheduling_task_run` 唯一键防重 |
+| `PREV_WORKDAY` | 提前到上一个工作日 | 同上，方向相反 |
+| `FORCE` | 无视日历照发 | 触发器不挂日历 |
+
+> 注意：`SKIP` 才是"日历"的自然语义；顺延/提前本质是"补偿任务"，所以由应用层生成一次性触发器比在日历里伪造时间更可控，也更容易在预览里解释清楚。
+
+### 2.4 执行语义
+
+| 维度 | 落地方案 |
+|---|---|
+| 任务并发 | `@DisallowConcurrentExecution` + `scheduling_task_run` 里 `RUNNING` 检查（双保险） |
+| misfire | `SKIP` → `withMisfireHandlingInstructionDoNothing()`；`FIRE_ONCE` → `...FireAndProceed()`；`CATCH_UP(n)` → Quartz 只保证"最近一次"，**n>1 由应用层扫描 run 表补**（Quartz 不擅长"补 3 次"） |
+| 幂等 | `scheduling_task_run` 唯一索引 `(task_id, planned_at) WHERE trigger_source <> 'MANUAL'` |
+| 超时 | 应用层 `Future.get(timeout)`；超时写 `TIMEOUT` 并中断线程 |
+| 重试 | 默认 0；采集/推送可配 2，指数退避（`retry_at` 字段 + 一次性触发器） |
+| 集群 | `spring.quartz.properties.org.quartz.jobStore.isClustered=true`、`instanceId=AUTO`、`clusterCheckinInterval=15000`；现在单实例但配置就绪 |
+| 启动对账 | 启动时 DB 任务 ↔ Quartz 触发器双向比对，多退少补（`SchedulerReconciler`），并提供 `/resync` 管理端点 |
+| 沉默告警 | 扫描 `next_fire_at + grace < now()` 且仍 `enabled` → 发运维告警（"任务挂了"要能被发现） |
+| 观测 | `SchedulerListener` / `TriggerListener` → Micrometer（`relayops_scheduling_runs_total{status}`、`relayops_scheduling_lag_seconds`）+ run 表 |
+
+**Job 里只做三件事**：读任务行 → 校验启用 → 交给处理器。不写业务逻辑，不碰其它表。
+
+```java
+@DisallowConcurrentExecution
+public class ScheduledTaskJob extends QuartzJobBean {
+    @Override protected void executeInternal(JobExecutionContext ctx) {
+        long taskId = Long.parseLong(ctx.getMergedJobDataMap().getString("taskId"));
+        executionService.run(taskId, ctx.getScheduledFireTime().toInstant(), TriggerSource.SCHEDULE);
+    }
+}
+```
+
+`JobDataMap` 只放 `taskId`（字符串），**绝不放参数对象** —— 避免序列化版本问题与配置漂移；参数永远从 `scheduling_task.params` 现读。
+
+### 2.5 表结构
+
+Quartz 官方 11 张表（`QRTZ_` 前缀，取自 Quartz 2.5.x `tables_postgres.sql`），由 Flyway 管理、`spring.quartz.jdbc.initialize-schema=never`：
+
+```text
+QRTZ_JOB_DETAILS  QRTZ_TRIGGERS  QRTZ_SIMPLE_TRIGGERS  QRTZ_CRON_TRIGGERS
+QRTZ_SIMPROP_TRIGGERS  QRTZ_BLOB_TRIGGERS  QRTZ_CALENDARS  QRTZ_PAUSED_TRIGGER_GRPS
+QRTZ_FIRED_TRIGGERS  QRTZ_SCHEDULER_STATE  QRTZ_LOCKS
+```
+
+> `QRTZ_CALENDARS` 表实际不用（日历不持久化），保留是官方脚本的完整性要求。
+
+业务表：
+
+```sql
+CREATE TABLE scheduling_calendar (
+    id          BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    code        VARCHAR(60)  NOT NULL UNIQUE,
+    name        VARCHAR(120) NOT NULL,
+    timezone    VARCHAR(60)  NOT NULL DEFAULT 'Asia/Shanghai',
+    source      VARCHAR(20)  NOT NULL DEFAULT 'MANUAL',   -- MANUAL | IMPORT
+    covered_to  DATE,
+    created_at  TIMESTAMPTZ  NOT NULL DEFAULT now(),
+    updated_at  TIMESTAMPTZ  NOT NULL DEFAULT now()
+);
+
+CREATE TABLE scheduling_calendar_day (
+    calendar_id BIGINT      NOT NULL REFERENCES scheduling_calendar(id) ON DELETE CASCADE,
+    day         DATE        NOT NULL,
+    day_type    VARCHAR(20) NOT NULL,                     -- HOLIDAY | MAKEUP_WORKDAY | WORKDAY
+    name        VARCHAR(80),
+    origin      VARCHAR(20) NOT NULL DEFAULT 'MANUAL',
+    PRIMARY KEY (calendar_id, day)
+);
+
+CREATE TABLE scheduling_task (
+    id                 BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    task_type          VARCHAR(100) NOT NULL,             -- ScheduledTaskHandler.taskType()
+    name               VARCHAR(120) NOT NULL,
+    kind               VARCHAR(30)  NOT NULL,             -- CRON|INTERVAL|CALENDAR_TIMES|ONCE|MONTH_NTH_WORKDAY
+    spec               JSONB        NOT NULL,
+    timezone           VARCHAR(60)  NOT NULL DEFAULT 'Asia/Shanghai',
+    calendar_code      VARCHAR(60),
+    params             JSONB,                             -- 处理器参数（含蓝图引用、工具参数）
+    misfire_policy     VARCHAR(20)  NOT NULL DEFAULT 'FIRE_ONCE',
+    max_catch_up       SMALLINT     NOT NULL DEFAULT 1,
+    concurrency_policy VARCHAR(20)  NOT NULL DEFAULT 'SKIP',
+    timeout_seconds    INTEGER      NOT NULL DEFAULT 300,
+    retry_max          SMALLINT     NOT NULL DEFAULT 0,
+    quiet_hours        JSONB,                             -- ["23:00","07:00"] 播报类用
+    enabled            BOOLEAN      NOT NULL DEFAULT TRUE,
+    next_fire_at       TIMESTAMPTZ,
+    version            INTEGER      NOT NULL DEFAULT 0,
+    created_at/updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE scheduling_task_run (
+    id             BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    task_id        BIGINT      NOT NULL REFERENCES scheduling_task(id) ON DELETE CASCADE,
+    planned_at     TIMESTAMPTZ NOT NULL,
+    trigger_source VARCHAR(20) NOT NULL,                  -- SCHEDULE|MANUAL|CATCH_UP|RETRY|HOLIDAY_SHIFT
+    started_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+    finished_at    TIMESTAMPTZ,
+    status         VARCHAR(20) NOT NULL,                  -- RUNNING|SUCCESS|FAILED|TIMEOUT|SKIPPED
+    duration_ms    INTEGER,
+    message        TEXT,
+    detail         JSONB                                  -- 各工具段耗时/结果摘要（供排查）
+);
+
+CREATE UNIQUE INDEX scheduling_task_run_idem
+    ON scheduling_task_run (task_id, planned_at) WHERE trigger_source <> 'MANUAL';
+CREATE INDEX scheduling_task_due_idx ON scheduling_task (next_fire_at) WHERE enabled;
+```
+
+### 2.6 API 与前端
+
+```text
+GET    /api/v1/scheduling/tasks               列表（含 nextFireAt、最近运行摘要）
+POST   /api/v1/scheduling/tasks               创建（spec + JSON Schema + 日历存在性校验）
+PUT    /api/v1/scheduling/tasks/{id}
+POST   /api/v1/scheduling/tasks/{id}/toggle
+POST   /api/v1/scheduling/tasks/{id}/run      立即执行（MANUAL）
+POST   /api/v1/scheduling/tasks/{id}/preview  仅预览：不发消息，把渲染结果回给管理员（dry-run）
+GET    /api/v1/scheduling/tasks/{id}/runs     执行历史（含 detail）
+POST   /api/v1/scheduling/spec/preview        spec + calendar → 未来 10 次触发时间
+GET    /api/v1/scheduling/calendars[/{code}/days]
+PUT    /api/v1/scheduling/calendars/{code}/days
+POST   /api/v1/scheduling/calendars/{code}/import
+POST   /api/v1/scheduling/resync              DB ↔ Quartz 对账
+GET    /api/v1/scheduling/types               任务类型 + 参数 Schema
+```
+
+前端（`ScheduledTasksView` 进化版）四个关键交互：
+
+1. **频率构造器**：`Cron / 间隔 / 按日+时刻 / 一次性 / 每月第 N 个工作日` 五个 Tab，切换即生成 spec。
+2. **未来 10 次预览**：任何改动实时调 `/spec/preview`，被顺延的条目标注"国庆顺延"。
+3. **消息编排器**（看 3.6）：定时消息的任务详情里是分段式编辑器，不是一个大文本框。
+4. **执行历史抽屉**：来源（`SCHEDULE/MANUAL/CATCH_UP/HOLIDAY_SHIFT`）、耗时、每段工具调用的成功/失败与耗时。
+
+### 2.7 验收
+
+- [ ] 6 类 kind 全部可创建、可预览、可执行；`INTERVAL` 带 `activeWindow` 时窗口外不触发。
+- [ ] 2026 年真实日历：国庆不跑、10-10（周六补班）要跑、春节顺延只补一次。
+- [ ] 应用停机 2 小时后启动：只补最近一次，不刷屏。
+- [ ] 两台实例同时启动：无重复执行（Quartz 集群锁 + 唯一索引）。
+- [ ] 日历数据修改后，已有触发器的下一次触发时间随之改变（`addCalendar(replace=true, updateTriggers=true)` 生效）。
+- [ ] 页面能解释"为什么这次没跑"（`SKIPPED` + 原因：节假日 / 静默时段 / 并发中）。
+
+---
+
+## 3. 专题二：机器人（大肥鱼式角色 + 插件 + 定时消息）
+
+### 3.1 "大肥鱼"给我们的设计启示
+
+monitor 里已经有 `V44__set_dafeiyu_default_persona.sql`：一段「蓝色小鲸鱼娘、嘴硬心软、一到三句短句、群聊先判断话题是否与你有关」的超长人设，配 5 种群回复策略（`MENTION / PROACTIVE / RANDOM / KEYWORD / AI_DECIDE`）和"每 10 轮滚动摘要"。它爆火的不是因为模型强，而是三件事做对了：
+
+1. **角色稳定**：有形象、性格、聊天节奏、关系处理、记忆与情绪、真实边界的**结构化约束**，而不是一句"你是一个可爱的助手"。
+2. **群聊像人**：能判断"这话跟不跟我有关"（`AI_DECIDE`）、回复短、不追问、不复读。
+3. **有玩法**：抽奖、生图、天气、语音，以及社区常见的签到/钓鱼/抽卡类小游戏。
+
+所以 v2 把这三件事做成**产品能力**，而不是一段提示词：
+
+| 体验 | 落成什么 |
+|---|---|
+| 角色稳定 | **角色卡（Persona Card）**：6 个结构化段落 + 示例 + 风格开关 + 音色 + 版本 |
+| 关系分层 | **关系模型**：`STRANGER / GROUP_MATE / FRIEND / CLOSE`，称呼与亲密度由关系驱动，不许对所有人叫"主人" |
+| 群聊像人 | **接话判定器**：独立的小模型调用，只输出"接/不接 + 理由"，带冷却与频率预算 |
+| 有玩法 | **插件**：签到、钓鱼、抽卡、天气卡、表情包、群规问答，都可声明式定义 |
+| 陪伴感 | **记忆**：L1 窗口 + L2 摘要 + L3 事实（谁说过什么、喜欢什么）+ L4 业务事实 |
+
+### 3.2 三模块职责与能力包 SPI
+
+| 模块 | 负责 | 不负责 |
+|---|---|---|
+| `agent` | 角色卡解析与分层装配、记忆读写与召回、提示词段落、模型路由与降级、工具注册表与权限谓词、渲染（表格/图片/文本）、能力包 SPI | 任何业务数据、任何通道协议 |
+| `assistant` | OneBot/Web 接入、准入与路由、命令分发、通用能力包、消息编排（Blueprint）、归档、插件运行时、会话存储 | 平台数据查询（只通过 `copilot` 包或 `contract`） |
+| `copilot` | 平台能力包：查询工具、诊断、日报/播报蓝图、口径与脱敏规则 | 通道、会话、记忆存储、模型调用（都由 `agent`/`assistant` 提供） |
+
+```java
+// agent.contract
+public interface CapabilityPack {
+    String id();                                  // "general" | "platform" | "plugin:<key>"
+    PackDescriptor describe();                    // 名称、适用通道、所需角色、优先级
+    List<PromptSection> prompt(PromptContext ctx);        // 提示词段落（含受保护段）
+    List<ToolSpec> tools(ToolContext ctx);                // 按身份/权限/通道裁剪
+    boolean supports(ScopeRef scope);
+    default List<BlueprintSegmentHandler> segments() { return List.of(); }  // 自定义消息段
+}
+```
+
+`ToolSpec` 元数据（**插件与定时消息都靠它做安全判定**）：
+
+```java
+public record ToolSpec(
+        String id,                    // "platform.pool.summary" / "plugin:fishing:cast"
+        String title, String description,
+        JsonSchema inputSchema,       // 前端据此渲染参数表单
+        SideEffect sideEffect,        // READ_ONLY | WRITE | DANGEROUS
+        boolean schedulable,          // 是否允许被定时消息引用
+        PermissionPredicate permission,   // ADMIN / SELF_ONLY / PLATFORM_SCOPE / PLUGIN_GRANT
+        RedactionPolicy redaction,        // NONE / CHANNEL（群聊强制）
+        Duration timeout, int maxResultBytes,
+        ToolHandler handler
+) {}
+```
+
+沿用 monitor 三条已验证的安全设计：**工具级隔离**（平台工具只挂平台身份）、**每请求构造**（用户级工具注入身份，方法不接受"查谁"）、**输出脱敏在返回值处执行**（不靠提示词）。
+
+### 3.3 角色卡（Persona Card v2）
+
+把 monitor 那段 70 行提示词拆成结构化字段，既能被页面编辑，也能被插件继承/覆盖：
+
+```sql
+CREATE TABLE assistant_persona (
+    id                  BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    code                VARCHAR(60)  NOT NULL UNIQUE,
+    name                VARCHAR(80)  NOT NULL,
+    description         VARCHAR(300),
+
+    -- 角色卡 6 段（都可空，空则跳过）
+    appearance_prompt   TEXT,          -- 形象
+    personality_prompt  TEXT,          -- 性格
+    rhythm_prompt       TEXT,          -- 聊天节奏（长度、语气词、是否追问）
+    relation_prompt     TEXT,          -- 关系与群聊（怎么称呼不同关系等级）
+    emotion_prompt      TEXT,          -- 记忆与情绪（怎么用记忆、怎么表达情绪）
+    boundary_prompt     TEXT,          -- 真实与角色（AI 身份、不编造、不越权）
+
+    style_rules         JSONB,         -- 结构化风格开关：maxSentences/emojiPerTurn/askBack/...
+    examples            JSONB,         -- few-shot：[{user, assistant}]
+    address_rules       JSONB,         -- {"CLOSE":"昵称或亲昵称呼","GROUP_MATE":"昵称"}
+    forbidden_phrases   JSONB,
+    voice_id            VARCHAR(80),
+    packs               JSONB NOT NULL DEFAULT '["general"]',
+    extends_id          BIGINT REFERENCES assistant_persona(id),
+    enabled             BOOLEAN NOT NULL DEFAULT TRUE,
+    is_default          BOOLEAN NOT NULL DEFAULT FALSE,
+    version             INTEGER NOT NULL DEFAULT 1,
+    created_at/updated_at
+);
+
+CREATE TABLE assistant_relation (            -- 关系分级：陪伴感的根
+    id          BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    scope_type  VARCHAR(20) NOT NULL,        -- USER
+    scope_key   VARCHAR(120) NOT NULL,       -- qq:user:123
+    level       VARCHAR(20) NOT NULL,        -- STRANGER | GROUP_MATE | FRIEND | CLOSE
+    nickname    VARCHAR(80),
+    note        VARCHAR(300),
+    updated_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (scope_type, scope_key)
+);
+```
+
+装配顺序（`PromptStack`，与 v1 一致，此处为最终版）：
+
+```text
+[SAFETY]        不可覆盖：不越权、不编造、不泄露
+[CAPABILITY]    能力包声明：口径、工具规则、输出格式、脱敏
+[PACK_STYLE]    能力包表达偏好（平台播报偏结构化，闲聊偏口语）
+[PERSONA]       角色卡 6 段 + 风格开关 + 示例（可覆盖槽位）
+[MEMORY]        摘要 + 召回事实（带来源与时间）
+[SESSION]       当前会话（说话人标签、引用消息、关系等级）
+[USER]          本轮消息
+```
+
+页面必须提供**提示词全文预览**：管理员看到的就是真正发给模型的文本，包含角色卡段落、记忆召回内容与脱敏后的工具说明。这一条能挡掉 80% 的"人设不生效"投诉。
+
+### 3.4 记忆（四层 + pgvector + 阿里云百炼）
+
+| 层 | 内容 | 存储 | 生命周期 |
+|---|---|---|---|
+| L1 工作记忆 | 最近 N 轮原文 | Redis（现有 `BotGroupContextService` 思路）+ 可选 PG | 会话内，重启不丢 |
+| L2 情节记忆 | 消息归档 + 每 10 轮滚动摘要 | `assistant_message` / `assistant_memory_summary` | 30–90 天 |
+| L3 语义记忆 | 用户偏好、群约定、共同经历 | `assistant_memory_fact` + `assistant_memory_embedding` | 长期，可 TTL |
+| L4 业务记忆 | 平台侧"上次结论/上次异常/当前口径" | 同表 `namespace='platform'` | 短 TTL，由任务/采集写入 |
+
+**向量放侧表，不放在事实表上** —— 维度是"列类型的一部分"，跟事实耦合会让换模型变成改表 + 全量重算。侧表让"事实"与"向量"解耦，可以多模型并存、无停机重建。
+
+```sql
+CREATE TABLE assistant_memory_fact (
+    id           BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    namespace    VARCHAR(20) NOT NULL,          -- platform | general | shared
+    scope_type   VARCHAR(20) NOT NULL,          -- USER | GROUP | CONVERSATION
+    scope_key    VARCHAR(120) NOT NULL,
+    category     VARCHAR(40) NOT NULL,          -- preference|profile|convention|business|relation
+    fact_key     VARCHAR(120),
+    fact_value   TEXT        NOT NULL,
+    confidence   NUMERIC(3,2) NOT NULL DEFAULT 0.80,
+    source       VARCHAR(20) NOT NULL,          -- EXPLICIT | DERIVED | LLM_EXTRACT
+    provenance   JSONB,
+    expires_at   TIMESTAMPTZ,
+    last_used_at TIMESTAMPTZ,
+    created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX assistant_memory_fact_scope_idx
+    ON assistant_memory_fact (namespace, scope_type, scope_key, category);
+
+CREATE TABLE assistant_memory_embedding (
+    fact_id     BIGINT NOT NULL REFERENCES assistant_memory_fact(id) ON DELETE CASCADE,
+    model       VARCHAR(60) NOT NULL,           -- text-embedding-v4 / qwen3.7-text-embedding-flash
+    dim         SMALLINT    NOT NULL,           -- 实际返回维度，写入时校验
+    embedding   vector,                         -- 不写死维度：先跑起来，定了再建索引
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (fact_id, model)
+);
+-- 维度稳定后再收紧为 vector(1024) 并建索引：
+-- ALTER TABLE assistant_memory_embedding ADD COLUMN embedding_v4 vector(1024);
+-- CREATE INDEX ... USING hnsw (embedding_v4 vector_cosine_ops);
+```
+
+> `vector` 不写维度时不能建 HNSW 索引，只能顺序扫描。几千到几万条事实在 PG 里是毫秒级，**足够用**；等维度稳定再收紧。
+
+#### 3.4.1 模型选型（D7 已定：阿里云百炼）
+
+百炼当前的文本向量模型（官方文档：向量与重排序）：
+
+| 模型 | 维度 | 单条最大 Token | 适用 |
+|---|---|---|---|
+| `qwen3.7-text-embedding` | 256~2560（默认 1024） | 131,072 | 长文本、精度优先 |
+| `qwen3.7-text-embedding-flash` | 256~1024（默认 1024） | 131,072 | 成本与吞吐优先 |
+| `text-embedding-v4` | 64~2048（默认 1024） | 8,192 | 通用推荐 |
+| `text-embedding-v3` | 512~1024 | 8,192 | 已有 v3 索引迁移 |
+
+**选型结论：`text-embedding-v4` + `1024` 维。** 理由：本场景事实都是短句（几十字），8192 token 的窗口绰绰有余；1024 维是官方"通用场景"默认值；v4 是文档明确推荐的纯文本模型，稳定性与示例最全。`qwen3.7-text-embedding-flash` 作为降本备选（同 1024 维，换模型只需重跑 embed，不动表）。
+
+可选增强（后置）：召回后加 `qwen3-rerank` 重排 top-20 → top-5，精度能再上一档，但多一次调用延迟，先不做。
+
+#### 3.4.2 接入方式与配置
+
+走**百炼的 OpenAI 兼容接口**，复用 Spring AI 已有的 `OpenAiEmbeddingModel`，不引第二个 SDK：
+
+```yaml
+relay-ops:
+  ai:
+    embedding:
+      enabled: ${BAILIAN_EMBEDDING_ENABLED:true}
+      base-url: ${BAILIAN_BASE_URL:https://dashscope.aliyuncs.com/compatible-mode/v1}
+      # 新版工作空间专属域名：https://{WorkspaceId}.cn-beijing.maas.aliyuncs.com/compatible-mode/v1
+      workspace-id: ${BAILIAN_WORKSPACE_ID:}
+      api-key: ${DASHSCOPE_API_KEY:}
+      model: ${BAILIAN_EMBEDDING_MODEL:text-embedding-v4}
+      dimensions: ${BAILIAN_EMBEDDING_DIMENSIONS:1024}
+      batch-size: ${BAILIAN_EMBEDDING_BATCH_SIZE:16}
+      timeout: ${BAILIAN_EMBEDDING_TIMEOUT:10s}
+      query-cache-size: 5000        # 同一句话重复 embed 的本地缓存
+```
+
+实现要点：
+
+1. **独立 `EmbeddingModel` Bean**，不要和聊天模型抢 `spring.ai.openai.*` —— 聊天可能接的是另一个供应商。
+2. **维度自检**：启动时 embed 一条探针文本，校验返回长度 == 配置维度；不一致**直接禁用向量召回并告警**，绝不写入错维数据。
+3. **批量 + 重试**：事实写入走批量 embed（一次 16 条），失败按指数退避重试 2 次，仍失败则先落事实、向量留空（后续 backfill 补）。
+4. **降级**：百炼不可用时召回自动退回"关键词 + 作用域"模式，聊天主流程不报错。
+5. **密钥**：`DASHSCOPE_API_KEY` 只从环境变量读，不入库、不进日志（monitor 的语音模块已是这个约定）。
+
+> 顺带：monitor 的 ASR/TTS 已经用百炼（Qwen-Audio + 工作空间 ID），本项目的语音能力和 embedding 可以共用同一个 `DASHSCOPE_API_KEY` 与工作空间，少一套凭证。
+
+#### 3.4.3 召回与写入策略
+
+召回：`hybrid = 向量 top-20 ∪ 关键词 top-20 → 去重 → 按 (相似度×0.6 + 置信度×0.2 + 时效×0.2) 排序 → 取 top-5`，总预算 800 token；`namespace` 过滤是硬条件（平台事实永不进闲聊）。
+
+写入三层策略：`EXPLICIT`（`/记住`、后台编辑）直接写；`DERIVED`（日报后写"上次结论"）确定性写；`LLM_EXTRACT`（从对话提炼偏好）进候选池，低风险自动、涉身份/权限一律拒绝。
+
+硬禁令：不存密钥、不存他人邮箱明文、"某人是否管理员"永不入记忆（每次实时判定）。
+
+**部署要求**：镜像换成 `pgvector/pgvector:pg17`，迁移里 `CREATE EXTENSION IF NOT EXISTS vector;`；向量维度由百炼返回并写入 `assistant_memory_embedding.dim`，启动自检不一致就禁用向量召回（见 3.4.2）。
+
+### 3.5 插件系统
+
+目标：**管理员不写 Java 也能给机器人加东西** —— 人设、触发词、外部工具、玩法、播报模板。这是"大肥鱼生态"能滚起来的原因，也是这次要一次设计对的地方。
+
+#### 3.5.1 三种插件形态（同一份清单，不同 runtime）
+
+| 形态 | 内容 | 能力上限 | 建议 |
+|---|---|---|---|
+| `DECLARATIVE` | `plugin.json` + 资源文件（图片/音色/示例）+ 模板 + HTTP 工具声明 | 声明式命令、HTTP 工具、模板、人设、玩法状态机（有限） | **默认，先做这个** |
+| `SCRIPT` | 上面 + 受限 JS（GraalJS） | 条件分支、随机、状态机、组合调用 | 阶段二，仅可信作者 |
+| `JAVA` | SPI jar + 隔离 ClassLoader | 任意 | 只给自研扩展，不建议开放 |
+
+三者共用：安装、校验、作用域绑定、权限授予、审计、版本回滚。差异只在 `runtime` 字段与执行器。
+
+#### 3.5.2 清单（manifest）
+
+```yaml
+id: fishing
+name: 大肥鱼钓鱼
+version: 1.0.0
+apiVersion: 1
+runtime: declarative
+author: 站长
+description: 群友钓鱼、卖鱼、攒好感度
+requires:
+  packs: [general]
+  permissions:
+    - memory.read:plugin:fishing
+    - memory.write:plugin:fishing
+    - image.render
+    - http.outbound:api.example.com
+personaPatch:                     # 可选：给绑定它的角色补充段落（不能覆盖受保护段）
+  emotionPrompt: |
+    你会记得群友上次钓到了什么，偶尔提一句。
+commands:
+  - name: 钓鱼
+    match: { type: regex, pattern: '^钓鱼$' }
+    cooldown: 30s
+    action:
+      type: script                 # 或 template / tool / http
+      script: |
+        const bag = ctx.memory.get("bag") || {fish: 0};
+        bag.fish += 1;
+        ctx.memory.put("bag", bag);
+        ctx.reply(`钓到一条小鱼，今天第 ${bag.fish} 条。`);
+tools:
+  - id: cast
+    title: 钓鱼
+    sideEffect: READ_ONLY
+    schedulable: false
+    http:
+      method: GET
+      url: https://api.example.com/fish
+      timeout: 5s
+      response: { path: "$.data", maxBytes: 65536 }
+templates:
+  - id: daily-fishing
+    title: 每日渔获
+    body: "今日全群钓到 {{tools.cast.total}} 条鱼"
+```
+
+#### 3.5.3 生命周期与安全边界
+
+```text
+上传 → 静态校验 → 安装（默认 disabled）→ 授予权限（逐条展示）→ 绑定作用域（全局/群/用户）
+     → 启用 → 运行（审计）→ 升级 / 回滚 / 禁用 / 卸载
+```
+
+静态校验（安装时，不通过直接拒绝）：
+
+1. schema 校验 + `apiVersion` 兼容性；
+2. 工具 `id` 不得侵占 `platform.*` / `general.*` 命名空间；
+3. `match.pattern` 正则复杂度与回溯风险（长度、嵌套量词）；
+4. 模板变量白名单（只允许 `{{tools.*}}`、`{{args.*}}`、`{{now}}` 等）；
+5. `http` 域名必须在 `permissions` 里声明（防 SSRF：内网网段、`localhost`、云元数据地址一律拒绝）；
+6. 不得声明 `tool.invoke:platform.*`（**平台能力不可被插件调用**）。
+
+运行时约束：
+
+| 风险 | 约束 |
+|---|---|
+| 密钥泄漏 | 插件只能引用 `secretRef`，值存 `assistant_plugin_secret`（加密），不落插件包、不进日志 |
+| 任意代码 | `SCRIPT` 运行在 GraalJS：无文件/网络/线程 API，仅 host API；CPU 200ms、内存 16MB、输出 32KB 上限 |
+| 绕过权限 | 插件只能"请求"工具；权限谓词与脱敏在 `agent` 的 `ToolRegistry` 统一执行，插件无法决定 |
+| 记忆污染 | 插件只能读写 `namespace = plugin:<id>`，看不见 `platform`/`shared` |
+| 无限调用 | 每插件每分钟调用上限、每会话冷却、全局并发上限；超限降级为固定话术 |
+| 升级破坏 | 版本不可变（`assistant_plugin_release`），安装指向 active release，回滚=切指针 |
+
+`DECLARATIVE` 形态能做到"玩法"的原因：提供**受限状态机动作**（`counter / bag / cooldown / random / choice`）作为声明式原语，覆盖签到、钓鱼、抽卡、好感度这类 80% 的群玩法，不需要真脚本。
+
+#### 3.5.4 表结构
+
+```sql
+CREATE TABLE assistant_plugin (
+    id           BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    plugin_key   VARCHAR(60) NOT NULL UNIQUE,
+    name         VARCHAR(120) NOT NULL,
+    runtime      VARCHAR(20) NOT NULL,            -- DECLARATIVE | SCRIPT | JAVA
+    active_release_id BIGINT,
+    status       VARCHAR(20) NOT NULL,            -- INSTALLED|ENABLED|DISABLED|BROKEN
+    granted_permissions JSONB NOT NULL DEFAULT '[]',
+    created_at/updated_at
+);
+
+CREATE TABLE assistant_plugin_release (
+    id          BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    plugin_id   BIGINT NOT NULL REFERENCES assistant_plugin(id) ON DELETE CASCADE,
+    version     VARCHAR(40) NOT NULL,
+    manifest    JSONB NOT NULL,
+    bundle      BYTEA,                            -- 资源 zip（图片/音色）
+    checksum    VARCHAR(64) NOT NULL,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (plugin_id, version)
+);
+
+CREATE TABLE assistant_plugin_scope (
+    id         BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    plugin_id  BIGINT NOT NULL REFERENCES assistant_plugin(id) ON DELETE CASCADE,
+    scope_type VARCHAR(20) NOT NULL,              -- GLOBAL | GROUP | USER
+    scope_key  VARCHAR(120) NOT NULL DEFAULT '*',
+    enabled    BOOLEAN NOT NULL DEFAULT TRUE,
+    config     JSONB,
+    UNIQUE (plugin_id, scope_type, scope_key)
+);
+
+CREATE TABLE assistant_plugin_invocation (
+    id           BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    plugin_id    BIGINT NOT NULL,
+    kind         VARCHAR(20) NOT NULL,            -- COMMAND | TOOL | SEGMENT | SCRIPT
+    target       VARCHAR(120),
+    scope_key    VARCHAR(120),
+    started_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+    duration_ms  INTEGER,
+    status       VARCHAR(20) NOT NULL,            -- OK | FAILED | DENIED | TIMEOUT
+    error        TEXT,
+    detail       JSONB
+);
+```
+
+### 3.6 定时消息的消息编排（Blueprint）
+
+这是本轮新增的第二个重点：**定时消息不是"一段文本"，而是"分段编排"，每段可以拉一个工具的实时结果，并且可以指定参数。**
+
+#### 3.6.1 蓝图结构
+
+```jsonc
+{
+  "id": 12,
+  "code": "platform.pool.daily",
+  "name": "号池日报",
+  "packId": "platform",
+  "personaId": 3,
+  "segments": [
+    { "type": "text",  "template": "【{{date}} 号池日报】共 {{tools.pool.total}} 个渠道" },
+
+    { "type": "tool",  "ref": "platform.pool.summary",
+      "as": "pool",
+      "args": { "window": "24h", "sort": "requests", "top": 5 },
+      "render": "table", "title": "流量 TOP5",
+      "onError": "DEGRADE", "cacheTtl": "5m" },
+
+    { "type": "tool",  "ref": "platform.account.abnormal",
+      "as": "abnormal", "args": {},
+      "render": "list", "title": "异常账号", "onEmpty": "HIDE" },
+
+    { "type": "tool",  "ref": "platform.channel.status",
+      "as": "channels",
+      "args": { "window": "{{args.window}}", "group": "{{args.group}}" },   // 参数可来自任务参数
+      "render": "table", "title": "分组健康" },
+
+    { "type": "image", "renderer": "pool.heatmap", "source": "{{tools.pool.rows}}" },
+
+    { "type": "persona_note", "prompt": "用一句话点评今天的号池，不超过 30 字" }
+  ],
+  "options": {
+    "timeout": "60s",
+    "fallback": "TEXT",
+    "onToolError": "DEGRADE",
+    "maxToolCalls": 8,
+    "redaction": "CHANNEL",
+    "suppressDuplicatesWithin": "PT6H"
+  }
+}
+```
+
+#### 3.6.2 语义定义（这些细节决定它好不好用）
+
+| 维度 | 规则 |
+|---|---|
+| 执行顺序 | 默认按 `segments` 顺序；同一 `parallelGroup` 的相邻工具段并发；每段有独立超时 |
+| 变量命名空间 | `{{args.*}}` 任务参数、`{{now/date/today/yesterday}}` 时间、`{{tools.<as>.*}}` 前置工具结果（受限 JSONPath，禁函数调用） |
+| 参数来源 | 字面量、任务参数、时间变量、前置工具结果（支持"把上一步的账号 ID 传给下一步"） |
+| 工具准入 | 只能引用 `sideEffect = READ_ONLY` **且** `schedulable = true` 的工具；写操作（自愈、充值、改倍率）**结构上不可能**被定时消息引用 |
+| 权限 | 以任务绑定身份执行（系统 / 指定管理员）；调用仍走 `ToolRegistry` 的权限谓词，**不因为是定时任务就提权** |
+| 脱敏 | 强制 `CHANNEL` 策略：群播报按群通道脱敏，不因"是管理员创建的"而豁免 |
+| 目标校验 | `platform` 包的蓝图只能发到平台群/管理员私聊；目标不匹配直接拒绝保存（防"平台日报误发到闲聊群"） |
+| 失败 | `SKIP`（丢该段留占位）/ `DEGRADE`（降级纯文本）/ `ABORT`（整条不发并告警），可在段级与全局级分别设置 |
+| 空结果 | `HIDE`（不渲染标题）/ `PLACEHOLDER`（显示"暂无异常"） |
+| 缓存 | `cacheTtl` 防止多个任务重复打上游；同一次播报内相同 `ref+args` 只调一次 |
+| 去重 | `suppressDuplicatesWithin`：内容 hash 相同且窗口内已发过则跳过（防"补跑导致重复播报"） |
+| 成本上限 | `maxToolCalls`、总超时、图片尺寸/张数上限；超限按 `DEGRADE` |
+| 预览 | **保存与启用前必须能 dry-run**：`/tasks/{id}/preview` 用真实工具生成一条草稿发给操作者本人，不投递目标群 |
+| 落记忆 | 播报内容作为 `ASSISTANT` 消息写入目标会话（可在 `memory_policy` 关闭），支持"群里接着追问刚才那份日报" |
+
+#### 3.6.3 与调度、投递的连接
+
+```text
+Quartz Trigger 触发
+   └─ ScheduledTaskJob → ExecutionService
+        └─ handler = "assistant.broadcast"（在 assistant 模块）
+             ├─ 读 scheduling_task.params → blueprintId + 目标 + 覆盖参数
+             ├─ assistant.application.compose: 执行 segments（工具 → agent.ToolRegistry；图片 → agent.render）
+             ├─ agent 记忆：召回（用于 persona_note 段）/ 写入（播报内容）
+             └─ notification.NotificationPort 投递（QQ / 邮件 / Webhook，统一重试与限流）
+```
+
+依赖方向：`assistant → scheduling.contract`（实现 handler），`scheduling` 不认识 `assistant`。这样"定时消息"对调度来说只是又一个任务类型。
+
+#### 3.6.4 前端：分段式编排器
+
+不做"一个大的 Markdown 输入框"，而是：
+
+```text
+[+ 文本] [+ 工具结果] [+ 图片] [+ 一句话点评]   ← 段类型
+─────────────────────────────────────────
+ 1  文本      【{{date}} 号池日报】…            ✎ ✕
+ 2  工具      platform.pool.summary            ✎ ✕
+              window=24h  sort=requests  top=5
+              渲染=表格  onError=降级
+ 3  工具      platform.account.abnormal        ✎ ✕
+...
+[预览草稿]  [保存]  [启用]
+```
+
+"工具"下拉的数据来自 `GET /api/v1/assistant/tools?pack=platform&schedulable=true`，选中后**按 `inputSchema` 自动渲染参数表单**，不需要前端为每个工具写死 UI。
+
+### 3.7 其余表（会话/消息/摘要/绑定/蓝图）
+
+```sql
+CREATE TABLE assistant_profile (               -- 作用域绑定：用哪套能力与人设
+    id            BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    scope_type    VARCHAR(20) NOT NULL,        -- GLOBAL|CHANNEL|GROUP|USER
+    scope_key     VARCHAR(120) NOT NULL,
+    pack_id       VARCHAR(30) NOT NULL,
+    persona_id    BIGINT REFERENCES assistant_persona(id),
+    model_profile VARCHAR(60),
+    memory_policy JSONB,                       -- 窗口大小、摘要间隔、召回开关、播报写记忆
+    guard_policy  JSONB,                       -- requireMention、白名单、接话预算
+    enabled       BOOLEAN NOT NULL DEFAULT TRUE,
+    UNIQUE (scope_type, scope_key, pack_id)
+);
+
+CREATE TABLE assistant_conversation (
+    id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    scope_type VARCHAR(20) NOT NULL, scope_key VARCHAR(120) NOT NULL,
+    pack_id VARCHAR(30) NOT NULL, persona_id BIGINT, persona_version INTEGER,
+    last_message_at TIMESTAMPTZ, status VARCHAR(20) NOT NULL DEFAULT 'ACTIVE',
+    UNIQUE (scope_type, scope_key, pack_id, persona_id, persona_version)
+);
+
+CREATE TABLE assistant_message (
+    id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    conversation_id BIGINT NOT NULL REFERENCES assistant_conversation(id) ON DELETE CASCADE,
+    seq BIGINT NOT NULL, role VARCHAR(16) NOT NULL,
+    speaker_id VARCHAR(64), speaker_name VARCHAR(80),
+    content TEXT NOT NULL, content_type VARCHAR(20) NOT NULL DEFAULT 'TEXT',
+    tokens INTEGER, redacted BOOLEAN NOT NULL DEFAULT FALSE,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (conversation_id, seq)
+);
+
+CREATE TABLE assistant_memory_summary (
+    id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    conversation_id BIGINT NOT NULL REFERENCES assistant_conversation(id) ON DELETE CASCADE,
+    upto_message_id BIGINT NOT NULL, summary TEXT NOT NULL,
+    tokens INTEGER, model VARCHAR(80), created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE assistant_blueprint (
+    id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    code VARCHAR(80) NOT NULL UNIQUE, name VARCHAR(120) NOT NULL,
+    pack_id VARCHAR(30) NOT NULL, persona_id BIGINT,
+    segments JSONB NOT NULL, options JSONB NOT NULL DEFAULT '{}',
+    enabled BOOLEAN NOT NULL DEFAULT TRUE, version INTEGER NOT NULL DEFAULT 1,
+    created_at/updated_at
+);
+```
+
+### 3.8 验收
+
+**分离与安全**
+
+- [ ] ArchUnit：`assistant` ↔ `copilot` 零依赖；`copilot` 仅 import 其他模块 `contract`；`agent` 不 import 业务模块。
+- [ ] 访客在命令、工具、提示词、记忆召回四条路径上都拿不到平台信息。
+- [ ] 平台蓝图无法保存到非平台群（目标校验拒绝）。
+
+**角色与体验**
+
+- [ ] 大肥鱼角色卡可从页面编辑；"提示词全文预览"包含 6 段 + 示例 + 召回记忆。
+- [ ] 群里 @ 与非 @ 两套策略都生效；`AI_DECIDE` 有频率预算（每小时最多主动 N 次，冷却生效）。
+- [ ] 关系等级从 `STRANGER` 升到 `CLOSE` 后称呼随之变化；不会对全体群友用亲昵称呼。
+
+**记忆**
+
+- [ ] 重启后 L1 不丢；L2 摘要可查；`/记住` `/忘记` 生效；平台事实不被闲聊召回。
+- [ ] 向量召回与纯关键词召回结果可对比（`/debug recall` 给管理员看）。
+
+**插件**
+
+- [ ] 上传一个 `.zip` 声明式插件（含 1 个命令 + 1 个 HTTP 工具 + 1 个人设补丁），安装后可用、可禁用、可回滚。
+- [ ] 插件尝试声明 `tool.invoke:platform.*` 或内网 HTTP 地址，安装被拒绝。
+- [ ] 插件超时/死循环被中断，记 `TIMEOUT` 审计，不影响其他群。
+
+**定时消息**
+
+- [ ] 蓝图含 3 个工具段（含参数）+ 1 张图 + 1 段点评，`preview` 能在私聊收到完整草稿。
+- [ ] 工具段参数可引用 `{{args.*}}` 与前一工具结果；非法 JSONPath 在保存时被拒绝。
+- [ ] 写操作工具不出现在可选列表；强行构造的引用在保存时被拒绝。
+- [ ] 工具全部失败时按 `DEGRADE` 发出纯文本版，并在 run.detail 里记录失败原因。
+- [ ] 播报后可追问"刚才那个结论再说一遍"，能引用到播报内容。
+
+---
+
+## 4. 里程碑（路线乙）
+
+| 里程碑 | 内容 | 人日 |
+|---|---|---|
+| **M0** 决策与基线 | D1–D12 定稿；三条依赖规则进 ArchUnit（先红后绿）；表名/前缀评审 | 3 |
+| **M1** Quartz 调度内核 | 依赖与配置、`QRTZ_*` Flyway 脚本、`spec→trigger` 编译器、`ScheduledTaskJob`、执行器（并发/超时/重试/幂等）、run 表、启动对账、观测 | 12–15 |
+| **M2** 工作日历 | `WorkdayQuartzCalendar` + `DayMatcher`、日历表与导入/校订、顺延补偿、未来 10 次预览 | 5–6 |
+| **M3** 三模块拆分 + agent 内核 | 模块骨架与规则、角色卡模型与装配、模型路由与降级、`ToolRegistry` + `ToolSpec` + 权限谓词、`CapabilityPack` SPI | 12–15 |
+| **M4** 记忆 | L1（Redis/PG）、L2 归档+摘要任务、L3/L4 事实表、pgvector 召回与混合排序、写入策略、隐私接口 | 12–16 |
+| **M5** 插件系统 | manifest 与校验、安装/作用域/权限/回滚、声明式命令与状态机原语、HTTP 工具、模板、审计、管理页 | 15–20 |
+| **M6** 消息编排 | `assistant_blueprint`、段执行器、变量与 JSONPath、工具准入与脱敏、失败策略与去重、dry-run、投递 | 8–10 |
+| **M7** 平台能力迁移（copilot） | 只读工具（平台/号池/账号/变更/用量/异常/渠道/错误/监控）、命令路由、口径与脱敏 | 15–20 |
+| **M8** 大肥鱼式群聊体验 | 关系分级、接话判定器、主动回复预算与冷却、音色、图片渲染策略、群聊策略页 | 8–12 |
+| **M9** 迁移与切流 | monitor 数据迁移（任务/人设/设置/归档）、双跑影子、灰度、回滚、文档 | 6–8 |
+| | **合计** | **96–125** |
+
+推荐顺序（先打通一条最完整的竖切）：
+
+```text
+M0 → M1 → M2 → M3 → M6（一条"工作日上午 9 点号池日报"跑通）
+   → M4（让播报能被追问）→ M7（把平台工具补全）
+   → M5（插件，可与 M7 并行）→ M8（群聊体验）→ M9
+```
+
+理由：M6 会把 M1/M2/M3 的接口全部撞一遍，早撞早改；插件（M5）依赖 `ToolRegistry` 与蓝图段机制，放在 M6 之后能直接复用。
+
+---
+
+## 5. 风险与对策
+
+| 风险 | 影响 | 对策 |
+|---|---|---|
+| Quartz 日历不持久化 + 忘记重注册 | "改了假期没生效" | 启动流程强制 `registerAllCalendars()`；改数据后 `addCalendar(replace=true, updateTriggers=true)`；集成测试覆盖"改假期→下次触发变化" |
+| Quartz 表与业务迁移混在一个 Flyway 历史 | 升级冲突 | `QRTZ_*` 用单独迁移文件并锁定版本；禁用 `initialize-schema`；升级 Quartz 前先跑表结构 diff |
+| `spec` 编排能力过强 | 用户写出无法解释的调度 | 前端只允许构造器生成；后端用 JSON Schema + 枚举校验；保存前强制预览 |
+| 插件引入任意 HTTP | SSRF / 数据外泄 | 域名白名单 + 内网/元数据地址黑名单 + 出站超时与体积上限 + 密钥只走 ref |
+| 脚本插件逃逸 | 任意代码执行 | GraalJS 沙箱、无 IO/网络上下文、CPU/内存/输出限额、默认不开放 `SCRIPT` |
+| 定时消息把平台数据发错群 | 数据泄漏 | 保存时校验 `blueprint.pack` 与目标作用域；强制通道脱敏；`preview` 强制 |
+| 工具段让播报变慢/变贵 | 触发超时、刷上游 | `maxToolCalls`、`cacheTtl`、同播报内同参去重、总超时 + `DEGRADE` |
+| 百炼 embedding 接口不可用/限流 | 写入无向量、召回退化 | 事实先落库、向量留空；召回自动退回关键词+作用域；后台 backfill 任务补 embed；批量+退避重试 |
+| pgvector 维度与模型不匹配 | 召回全错 | 侧表存 `model`/`dim`，启动探针自检，维度不符拒绝写入并告警；换模型走"新增 model 行 + 重建索引" |
+| 记忆写入隐私 | 合规 | 硬禁令 + 保留期 + `/忘记` + 管理员导出/删除 |
+| 三模块拆分后 `assistant` 膨胀 | 回归难维护 | 包内分层 + ArchUnit 子包规则（如 `assistant.adapter.in.onebot` 不得依赖 `assistant.application.compose` 之外） |
+
+---
+
+## 6. 需要你确认的剩余决策
+
+| # | 问题 | 选项 | 推荐 |
+|---|---|---|---|
+| **D1** | 插件形态先做到哪一档 | 仅声明式 / **声明式 + 后续脚本** / 直接含脚本 | **声明式优先**，`SCRIPT` 留接口但不开放 |
+| **D2** | 插件能否访问外部 HTTP | 禁止 / **允许（域名白名单）** / 允许任意 | **白名单** |
+| **D3** | 插件能否调用平台工具 | **不可** / 只读可 / 全部可 | **不可**（保持能力隔离） |
+| **D4** | 定时消息允许引用写操作工具 | **禁止** / 需二次确认 | **禁止**（结构上不可选） |
+| **D5** | 播报前是否强制 dry-run 预览 | **强制** / 可选 / 不要求 | **强制**（首次启用） |
+| **D6** | 角色卡是否结构化 6 段 | **结构化 + 自由补充** / 单一长文本 | **结构化** |
+| **D7** | embedding 模型与维度 | ✅ **已定：阿里云百炼 `text-embedding-v4`，1024 维**（侧表存 `model`/`dim`，可换 `qwen3.7-text-embedding-flash`） | 已定 |
+| **D8** | pgvector 部署 | **换 `pgvector/pgvector:pg17` 镜像** / 保留原镜像并手工装扩展 | **换镜像** |
+| **D9** | Quartz 表前缀 | `QRTZ_`（官方默认）/ 自定义 | 官方默认 |
+| **D10** | 集群模式 | **现在开 `isClustered=true`** / 先单机 | **先开配置，单实例运行** |
+| **D11** | 关系分级是否本期做 | 做 / 只留字段 | 做（大肥鱼体验的核心） |
+| **D12** | 插件市场（导出/导入 zip 分享） | 本期做 / 后置 | 后置，但 manifest 先按可导出设计 |
+| **D13** | 前端 | **复用 monitor 的 Vue3 + Element Plus 改造** / 重写 | 复用 |
+| **D14** | 表名前缀 | **业务域前缀**（`scheduling_*` / `assistant_*`）+ `QRTZ_*` | 是 |
+
+---
+
+## 7. 附录 A：为什么选乙（v1 对比摘要）
+
+| 维度 | 甲（自研 planner） | 乙（Quartz） |
+|---|---|---|
+| 集群 | 自研锁 + 唯一索引 | 原生 |
+| misfire | 自研 | 原生 + 需应用层补多次 |
+| 中国日历 | 自研判定（简单直接） | 自定义 `Calendar`（能复用引擎，但要知道"只能排除"） |
+| 依赖成本 | 0 | 11 张表 + 一套配置 + 序列化约束 |
+| 长期演进 | 任务量上来后要自己补集群/补偿 | 引擎能力已就位 |
+
+结论：你的场景（单库、可接受多 11 张表、未来可能多实例）选乙合适。**唯一需要在实现时守住的原则是：业务逻辑永远不在 Job 里，Quartz 只当"闹钟"。**
+
+## 8. 附录 B：monitor → relay-ops 映射（含新增）
+
+| monitor | relay-ops 落点 | 处理 |
+|---|---|---|
+| `scheduler/ScheduledTask*` | `scheduling/{domain,adapter/out/persistence}` | 重写，spec/params/执行语义 |
+| `scheduler/DynamicScheduledTaskManager` | `scheduling/application/{planner,execution}` | 改为 Quartz 编译器 + 协调器 |
+| `common/schedule/ScheduledTaskHandler` | `scheduling/contract/ScheduledTaskHandler` | 升级为 `execute(TaskExecution)` |
+| `api/controller/ScheduledTaskController` | `scheduling/adapter/in/web` | 重写（preview / runs / 日历 / resync） |
+| `bot/BotChatClientFactory` 三段提示词 | `copilot` + `assistant` 各自 `CapabilityPack.prompt()` | 提示词从常量搬进能力包 |
+| `bot/MonitorChatTools`、`ops/OpsMonitoringTools`、`bot/{order,usage,channel}/**Tools` | `copilot/tool` | 重写为 `ToolSpec` + contract 依赖 |
+| `bot/weather|image|search|voice|vision/` | `assistant/capability/general` | 平移 |
+| `bot/BotPromptComposer` | `agent/kernel/prompt` | 升级为 `PromptSection` 栈 |
+| `bot/BotPersona*` + `V43/V44` | `assistant_persona`（角色卡 6 段） | 迁移 + 字段扩展；大肥鱼内容拆段 |
+| `bot/BotGroupReplyPolicy/Strategy` | `assistant_profile.guard_policy` + 接话判定器 | 语义保留，结构显式化 |
+| `bot/BotGroupContextService`（Redis 摘要） | `agent/kernel/memory` L1/L2 | 迁移到 Redis + PG 双层 |
+| `bot/archive/` | `assistant/application/archive` + `assistant_message` | 合并 |
+| `bot/BotLottery*` | `assistant` 内置玩法 or 插件 | 建议做成**第一个示例插件** |
+| `mail/DailyBalanceReportService` + `V12` | `copilot` 蓝图 + `assistant.broadcast` | 变成 blueprint + 定时任务 |
+| `bot_settings.platform_groups` | `assistant_profile`（pack 绑定） | 拆表 + 语义显式化 |
+| —（新增） | `assistant_plugin*`、`assistant_blueprint` | 插件与消息编排 |
+
+## 9. 下一步
+
+D7 已定（百炼 `text-embedding-v4` / 1024 维 / 侧表存 model+dim），不再阻塞建表。开工前只剩一件事：
+
+**确认第 6 节其余项按推荐执行**，其中三项影响面最大：D1 插件先只做声明式、D3 插件不可调用平台工具、D5 播报首次启用强制 dry-run 预览。
+
+之后我按 `M0 → M1 → M2 → M3 → M6` 推进，第一个可验收的产物是：**Quartz 跑起来的"工作日上午 9 点号池日报"，带 3 个工具段 + 1 张图 + 一段人设点评，能在私聊收到 dry-run 草稿。**
+
+首批代码改动清单（M0–M1 会落到仓库里）：
+
+| 文件 | 改动 |
+|---|---|
+| `backend/pom.xml` | 加 `spring-boot-starter-quartz`；pgvector 走 JDBC 原生 SQL，不需要额外 Java 依赖 |
+| `compose.yaml` | `postgres:17-alpine` → `pgvector/pgvector:pg17` |
+| `application.yml` | 加 `spring.quartz.*`（jdbc job store、集群、`initialize-schema=never`）与 `relay-ops.ai.embedding.*` |
+| `db/migration/V1__scheduling.sql` | `scheduling_task` / `scheduling_task_run` / `scheduling_calendar(_day)` |
+| `db/migration/V2__quartz.sql` | 官方 11 张 `QRTZ_*` 表 |
+| `db/migration/V3__assistant_memory.sql` | `CREATE EXTENSION vector` + 事实/向量侧表（可选先建，供 M4 用） |
+| `ModuleBoundaryTest` | 三条新依赖规则（先红后绿） |
+
+---
+
+## 10. 实施进展
+
+### M0 已交付（2026-11-10）
+
+| 项 | 落点 |
+|---|---|
+| Quartz 依赖 | `backend/pom.xml` → `spring-boot-starter-quartz` |
+| pgvector 镜像 | `compose.yaml` → `pgvector/pgvector:pg17` |
+| 调度配置 | `application.yml` → `spring.quartz.*`（JDBC JobStore、集群、`initialize-schema=never`）、`relay-ops.scheduling.*`、`relay-ops.ai.embedding.*` |
+| 业务表 | `db/migration/V1__scheduling.sql`（4 张表 + 幂等唯一索引 + 种子日历 `cn-official`） |
+| Quartz 表 | `db/migration/V2__quartz.sql`（官方 11 张 `QRTZ_*`） |
+| 边界规则 | `ModuleBoundaryTest` 新增 agent/assistant/copilot 五条规则，`allowEmptyShould(true)` 先红后绿已就位 |
+
+`V3__assistant_memory.sql` 未建：它依赖 `CREATE EXTENSION vector`，属于 M4；提前建会让没有 pgvector 的环境直接迁移失败。D7 的侧表设计已在文档里定稿，M4 落表即可。
+
+### M1 已交付（同日）
+
+| 能力 | 落点 |
+|---|---|
+| `spec` 解析与校验 | `application/plan/ScheduleSpecCodec`（kind 必填、日历必填、activeWindow 边界、cron 范围） |
+| `spec` → 触发器编译 | `application/plan/ScheduleSpecCompiler`（按日+时刻统一编译成 `0 m h ? * *`） |
+| 中国工作日 | `domain/day/{CalendarData,DayMatcher,DayMatchers}`（含调休补班、每月第 N/最后一个工作日） |
+| Quartz 日历桥 | `application/calendar/WorkdayQuartzCalendar`（`isTimeIncluded` 直接判定日规则，绕开"日历只能排除"的限制） |
+| 日历注册表 | `application/calendar/SchedulingCalendarRegistry`（确定性命名、启动重注册、改数据后 `refresh`） |
+| 触发器同步 | `application/task/TaskRegistrationService`（注册/注销/对账/一次性触发/回填 `next_fire_at`） |
+| 执行器 | `application/execution/TaskExecutionService`（幂等、静默时段、并发、超时、失败重试、run 记录） |
+| 启动对账 | `application/task/SchedulingBootstrap`（收尾遗留 RUNNING → FAILED，DB↔Quartz 双向对齐） |
+| 管理 API | `adapter/in/web/SchedulingController`（tasks CRUD/启停/立即执行/runs、spec 预览、types、日历读改导入、resync） |
+| 自检处理器 | `application/task/SelfTestTaskHandler`（`scheduling.selftest`，`params.fail=true` 可验证失败链路） |
+
+**验收结果**：`mvn test` 52 项全绿，含新增 30 项调度单测（预览一致性、调休补班、第 N/最后工作日、Quartz 日历跳假、spec 校验、模块边界）。
+
+### 与原计划的偏差（有意为之）
+
+1. **`activeWindow` 只支持 `CALENDAR_TIMES` / `MONTH_NTH_WORKDAY`**。对 `INTERVAL` 做窗口跳过需要"跳到窗口起点再重算"，与 Quartz 的 SimpleTrigger 语义不易对齐，强行做会让预览与执行不一致。当前保存时明确报错，而不是悄悄忽略。
+2. **`CATCH_UP(n>1)` 尚未实现**。Quartz 只保证"补最近一次"，多次补跑要应用层扫 run 表；M1 先按 `FIRE_ONCE` 交付，多次补跑随 M2 一起做。
+3. **节假日顺延（`NEXT_WORKDAY` / `PREV_WORKDAY`）只存策略、不生成补偿**。M2 用"被排除的计划点 → 生成 `HOLIDAY_SHIFT` 一次性触发器"实现，`trigger_source` 与唯一键已留好。
+4. **沉默告警**（`next_fire_at + grace` 超时未执行）未实现，属可观测性收尾。
+
+### 一个已修掉的真实坑
+
+Quartz 的 `CronExpression.isValidExpression("0 0 99 * * ?")` 返回 **true** —— 它接受越界的小时值，然后永不触发。现在 `ScheduleSpecCodec` 在保存时按字段做范围校验（秒/分 0-59、时 0-23、日 1-31、月 1-12、周 1-7、年 1970-9999），把"配错了但保存成功"变成"保存即报错"。这条有单测守护。
+
+### 尚未验证的部分
+
+本机没有 Docker CLI，`compose up` + Flyway + Quartz 启动的**运行时联调未执行**。需要在一台有 Docker 的机器上跑：
+
+```powershell
+docker compose up -d
+cd backend; mvn spring-boot:run
+# 然后打开 /api/v1/scheduling/calendars 与 /api/v1/scheduling/types 确认迁移与注册正常
+```
+
+---
+
+## 11. M2 已交付（2026-11-10）
+
+### 节假日顺延补偿
+
+| 部件 | 说明 |
+|---|---|
+| `HolidayShiftPlanner` | 纯函数：pattern 想要的日期被日历挡住时，算出应顺延/提前到哪个工作日 |
+| `HolidayShiftService` | 把计划物化成 `HOLIDAY_SHIFT` 一次性触发器；每次注册任务、改日历、每日 00:05 扫描时重算 |
+| 幂等 | 触发器名 `shift-<时间戳>`，任务组内唯一；多个被挡日期落到同一时刻只发一次 |
+
+**语义澄清（这一版才想明白）**：顺延不是"把每个被吞掉的计划点都挪到节后"（那会把 7 天假期堆成 7 条消息），而是：
+
+1. 仅当**目标工作日当天没有常规触发**时才补——所以"每工作日 9:00"永远不产生补发（节后第一天本来就发），补发只对"每周一""每月 1 日""指定日期"这类**日期型 pattern** 有意义；
+2. 多个被挡日期映射到同一时刻时合并为一次；
+3. 顺延的补偿触发器与常规触发器同组，重新注册任务时一起重建，不会残留。
+
+为此新增了 `MONTH_DAYS`（每月 N 日）规则——没有它，"顺延"几乎没有用武之地（每月 1 日的月报遇周末顺延到周一，才是真实需求）。
+
+### 顺带修掉的一个执行/预览不一致 bug
+
+原先 `WEEKDAYS` / `CUSTOM_DATES` 这类日期型规则被判定为"不需要日历"，于是 Quartz 触发器**不挂 matcher**、每天都会触发；而预览走的是 matcher，只显示周一。也就是"预览说周一，实际天天跑"。
+
+修复：`ScheduleSpec.usesDayMatcher()` 与 `needsCalendarData()` 拆成两个概念——**凡按日筛选的调度都必须挂日历**（否则 Quartz 无法筛日），只是日期型规则用空日历数据即可。日历注册表改为接收编译后的 matcher（而不是自己重建），保证注册、预览、执行三者用同一个谓词。
+
+另外：Shift 策略下 matcher 会额外要求"当天是工作日"，因此假期的周一既不正常触发、也不会被补发重复。
+
+### 日历导入
+
+`CalendarImportParser` 支持三种格式，`POST /calendars/{code}/import/raw`（`format` 可为 `AUTO/JSON/ICS/TEXT`）：
+
+| 格式 | 形态 |
+|---|---|
+| JSON 数组 | `[{"date":"2026-10-01","type":"HOLIDAY","name":"国庆"}]` |
+| holiday-cn JSON | `{"year":2026,"days":[{"date":"...","name":"...","isOffDay":true}]}`，`isOffDay=false` → 补班 |
+| ICS | `VEVENT` + `DTSTART;VALUE=DATE` + `SUMMARY`（含"补班"字样判为补班） |
+| 纯文本 | 每行 `2026-10-01 HOLIDAY 国庆`，也接受 `2026-10-10 补班` |
+
+`/calendars` 新增 `coverageWarning`：未导入任何日期、或覆盖不足 60 天时提示"请导入 YYYY 年放假安排"——避免跨年后静默退回"周一至周五"的默认规则。
+
+### 验收
+
+`mvn test` **69 项全绿**（新增 17 项：顺延计划 8、日历导入 6、日期规则 3）。仍缺运行时联调（本机无 Docker）。
+
+### 仍未做
+
+- 沉默告警（`next_fire_at + grace` 超期未跑）
+- `CATCH_UP(n>1)` 多次补跑
+- 真实 2026/2027 日历数据本身（需要导入，代码不内置——避免用错的法定节假日数据）
+
+
+
