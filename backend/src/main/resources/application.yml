@@ -123,11 +123,13 @@ logging:
 relay-ops:
   timezone: ${RELAY_OPS_TIMEZONE:Asia/Shanghai}
   security:
-    # 仅本地开发用：identity 尚未落地时让前端能直接调 /api/**。生产必须保持 false。
-    dev-open: ${RELAY_OPS_DEV_OPEN_API:true}
+    # 仅本地开发用：identity 尚未落地时让前端能直接调 /api/**。生产必须保持 false；
+    # 本地联调时在 .env 里设 RELAY_OPS_DEV_OPEN_API=true。
+    dev-open: ${RELAY_OPS_DEV_OPEN_API:false}
     cors-origins: ${RELAY_OPS_CORS_ORIGINS:http://localhost:5173}
   scheduling:
-    enabled: ${RELAY_OPS_SCHEDULING_ENABLED:true}    zone: ${RELAY_OPS_SCHEDULING_ZONE:Asia/Shanghai}
+    enabled: ${RELAY_OPS_SCHEDULING_ENABLED:true}
+    zone: ${RELAY_OPS_SCHEDULING_ZONE:Asia/Shanghai}
     default-calendar: ${RELAY_OPS_SCHEDULING_CALENDAR:cn-official}
     execution-timeout: ${RELAY_OPS_SCHEDULING_EXECUTION_TIMEOUT:5m}
     silent-alert-grace: ${RELAY_OPS_SCHEDULING_SILENT_GRACE:15m}
