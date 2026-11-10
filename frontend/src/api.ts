@@ -26,6 +26,7 @@ export const api = {
 
   personas: () => http.get('/assistant/personas'),
   promptPreview: (body: unknown) => http.post('/assistant/prompt/preview', body),
+  chat: (body: unknown) => http.post('/assistant/chat', body),
 
   blueprints: () => http.get('/assistant/blueprints'),
   blueprintPreview: (id: number, body: unknown) => http.post(`/assistant/blueprints/${id}/preview`, body),

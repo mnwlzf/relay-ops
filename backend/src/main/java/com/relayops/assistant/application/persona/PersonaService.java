@@ -18,7 +18,7 @@ import org.springframework.stereotype.Service;
 
 /** Persona CRUD, scope binding, and resolution to {@link PersonaCard} for the kernel. */
 @Service
-public class PersonaService {
+public class PersonaService implements PersonaDirectory {
 
     private final PersonaRepository repository;
 
