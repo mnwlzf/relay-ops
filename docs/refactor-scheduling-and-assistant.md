@@ -540,7 +540,7 @@ relay-ops:
 
 硬禁令：不存密钥、不存他人邮箱明文、"某人是否管理员"永不入记忆（每次实时判定）。
 
-**部署要求**：镜像换成 `pgvector/pgvector:pg17`，迁移里 `CREATE EXTENSION IF NOT EXISTS vector;`；向量维度由百炼返回并写入 `assistant_memory_embedding.dim`，启动自检不一致就禁用向量召回（见 3.4.2）。
+**部署要求**：镜像用 pgvector 官方镜像（`compose.yaml` 当前为 `pgvector/pgvector:pg18-trixie`），`V4__vector_extension.sql` 负责建扩展；向量维度由百炼返回并写入 `assistant_memory_embedding.dim`，启动自检不一致就禁用向量召回（见 3.4.2）。
 
 ### 3.5 插件系统
 
@@ -1002,6 +1002,10 @@ D7 已定（百炼 `text-embedding-v4` / 1024 维 / 侧表存 model+dim），不
 
 `V3__assistant_memory.sql` 未建：它依赖 `CREATE EXTENSION vector`，属于 M4；提前建会让没有 pgvector 的环境直接迁移失败。D7 的侧表设计已在文档里定稿，M4 落表即可。
 
+**2026-11-10 补充**：`V4__vector_extension.sql` 已落地，内容只有 `CREATE EXTENSION IF NOT EXISTS vector;`，向量表结构仍随 M4。
+`CREATE EXTENSION` 需要超级用户（pgvector 不是 trusted 扩展）：本地 compose 的 `POSTGRES_USER=relay_ops` 是容器超级用户，迁移可直接通过；
+连外部 PostgreSQL 且应用账号是普通角色时，需 DBA 先用超级用户执行一次 `CREATE EXTENSION vector;`，迁移本身在扩展已存在时是幂等空操作。
+
 ### M1 已交付（同日）
 
 | 能力 | 落点 |
@@ -1177,8 +1181,49 @@ cd backend; mvn spring-boot:run
 
 ### M3 仍未做
 
-- 模型路由与降级（`ModelProfile` 注册表、可用性探测、失败降级到无模型模式）
+- ~~模型路由与降级~~（见第 15 节，已完成）
 - 会话记忆（M4）与消息编排（M6）
+
+---
+
+## 15. M3 完成：模型路由与降级（2026-11-10）
+
+| 部件 | 说明 |
+|---|---|
+| `ChatProperties` | `relay-ops.ai.chat.*`：主/降级两个槽位，每槽 `base-url` / `api-key` / `model` / `temperature` / `max-tokens`；缺任一项的槽位自动跳过 |
+| `ModelRouter` | 解析顺序 primary → fallback；全部不可用时进入"仅命令模式"，`status()` 给出原因与脱敏后的槽位 |
+| `ChatClientRegistry` | 按槽位懒构建并缓存 `ChatClient`（Spring AI 1.1 的 `OpenAiApi.builder()` / `OpenAiChatModel.builder()`），无模型时完全不触碰网络 |
+| API | `GET /api/v1/assistant/models`：是否启用、是否可用、原因、各槽位的模型与打码密钥 |
+
+三条取舍：
+
+1. **两个开关各管一段**：`SPRING_AI_MODEL_CHAT` 只影响 Spring AI 的自动装配；本项目用
+   `RELAY_OPS_AI_CHAT_ENABLED` 控制自有路由。前者保持 `none` 也能正常构建客户端。
+2. **"没有模型"是合法状态**。解析为空时助手回落到命令模式（`/平台`、`/号池` 等仍可用），
+   不抛异常、不阻塞启动；夜间无人值守时缺配置不该让整个应用起不来。
+3. **密钥只活两处**：配置对象与请求头。状态接口只回 `sk-a****mnop` 形式的打码值，
+   日志里只有槽位与模型名。
+
+验收：`mvn test` **107 项全绿**（新增 7 项：路由 5、客户端 2）。
+
+### M3 收尾状态
+
+`agent` 内核（提示词分层、角色卡、能力包 SPI、工具注册表、模型路由）、`assistant` 的人设持久化
+与提示词装配均已就位。下一站 **M4：记忆**——四张表（会话/消息/摘要/事实 + 向量侧表）、
+百炼 embedding 接入、混合召回与写入策略。
+
+### 文本编码守护（来自一次真实事故）
+
+另一个会话用 ANSI/GBK 写了 `V4__vector_extension.sql`，中文注释被双重编码破坏，且已含替换字符、
+无法逐字还原（只能按原意重写）。为此新增 `TextFileEncodingTest`，扫描 README、`.env.example`、
+`compose.yaml`、`docs/**/*.md`、`db/migration/**/*.sql` 与 `src/main/**/*.java`：
+
+1. 按 UTF-8 **严格解码**，非 UTF-8 直接失败；
+2. 不含替换字符 `U+FFFD`；
+3. 不含双重编码的乱码标记（`锛` / `鐨` / `鎵` 等），因为这类文件是"合法 UTF-8"，单靠解码校验发现不了。
+
+顺带统一了两件事：`compose.yaml` 使用 `pgvector/pgvector:pg18-trixie`（用户本人调整），
+`V4__vector_extension.sql` 只负责 `CREATE EXTENSION IF NOT EXISTS vector;`，向量表结构随 M4 落地。
 
 
 
