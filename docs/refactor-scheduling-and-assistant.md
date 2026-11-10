@@ -1367,6 +1367,25 @@ cd backend; mvn spring-boot:run
 - 采集完成后发布 `AccountCollectedEvent`，驱动看板与告警（事件契约已存在）
 - 采集并发度控制（当前串行；账号多时按 `RELAY_OPS_COLLECT_CONCURRENCY` 分批）
 
+---
+
+## 21. 采集补齐：Sub2API、事件与总览（2026-11-10）
+
+| 部件 | 说明 |
+|---|---|
+| `Sub2ApiUpstreamClient` | `GET /v1/usage` + Bearer；解析同时接受 `data.*` 与根对象、snake_case 与 camelCase 的常见字段 |
+| `AccountCollectedEvent` | 每成功采集一个账号发布一次；发布失败只记日志，不影响采集结果 |
+| `GET /api/v1/upstream/dashboard` | 每个启用账号的最新快照（`LATERAL`），按余额倒序 |
+| 前端「总览」页 | 余额/已用/请求数/状态/采集时间 + 最近一次运行统计，支持一键采集 |
+
+两条判断：
+
+1. **Sub2API 的字段解析故意宽容**：不同部署的 payload 位置不一致，未识别时返回 PARTIAL 并保留 `raw`，
+   而不是把缺失字段写成 0 —— 写 0 会让看板看起来"余额为 0"。
+2. **事件发布不阻塞采集**：事件消费者（看板、告警）出问题时只丢一次通知，不拖垮本轮采集。
+
+验收：`mvn test` **158 项全绿**（新增 5 项：Sub2API 解析 4、事件发布 1）。
+
 
 
 
