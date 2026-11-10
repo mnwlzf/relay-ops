@@ -35,11 +35,14 @@ public class OneBotWebhookController {
     private final OneBotProperties properties;
     private final OneBotClient client;
     private final ChatService chatService;
+    private final OneBotAccessPolicy accessPolicy;
 
-    public OneBotWebhookController(OneBotProperties properties, OneBotClient client, ChatService chatService) {
+    public OneBotWebhookController(OneBotProperties properties, OneBotClient client,
+                                   ChatService chatService, OneBotAccessPolicy accessPolicy) {
         this.properties = properties;
         this.client = client;
         this.chatService = chatService;
+        this.accessPolicy = accessPolicy;
     }
 
     @PostMapping
@@ -55,6 +58,10 @@ public class OneBotWebhookController {
         OneBotEvent event = OneBotEvent.parse(payload);
         if (event == null || event.fromSelf()) {
             return ResponseEntity.ok("ignored");
+        }
+        if (!accessPolicy.allowed(event)) {
+            log.info("非白名单群消息已忽略: groupId={}", event.groupId());
+            return ResponseEntity.status(HttpStatus.FORBIDDEN).body("group not allowed");
         }
         String text = event.cleanText();
         if (text.isEmpty()) {
@@ -79,7 +86,8 @@ public class OneBotWebhookController {
                 ? ScopeRef.group("qq:group:" + event.groupId())
                 : ScopeRef.user("qq:user:" + event.userId());
         ChatService.ChatReply reply = chatService.chat(new ChatService.ChatRequest(
-                scope, "general", "qq:" + event.userId(), event.nickname(), text, false, false));
+                scope, "general", "qq:" + event.userId(), event.nickname(), text,
+                accessPolicy.admin(event.userId()), accessPolicy.admin(event.userId())));
         String outbound = reply.reply() == null || reply.reply().isBlank()
                 ? "（没有生成回复）" : reply.reply();
         if (event.isGroup()) {

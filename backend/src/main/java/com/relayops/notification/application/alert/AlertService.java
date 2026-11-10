@@ -30,14 +30,17 @@ public class AlertService {
     private final NotificationPort notifications;
     private final NotificationProperties properties;
     private final BusinessTime time;
+    private final org.springframework.context.ApplicationEventPublisher events;
 
     public AlertService(MonitoringQueryPort monitoring, AlertStore store, NotificationPort notifications,
-                        NotificationProperties properties, BusinessTime time) {
+                        NotificationProperties properties, BusinessTime time,
+                        org.springframework.context.ApplicationEventPublisher events) {
         this.monitoring = monitoring;
         this.store = store;
         this.notifications = notifications;
         this.properties = properties;
         this.time = time;
+        this.events = events;
     }
 
     /** @return number of alerts delivered */
@@ -66,6 +69,7 @@ public class AlertService {
                     properties.mail().to(), "alert",
                     Map.of("subject", subjectOf(alert), "body", bodyOf(alert))));
             store.record(alert.accountId(), alert.type().name(), now, alert.message());
+            publish(alert);
         }
         if (!alerts.isEmpty()) {
             log.info("已发送告警: count={}", alerts.size());
@@ -73,8 +77,17 @@ public class AlertService {
         return alerts.size();
     }
 
-    private String subjectOf(AlertRules.Alert alert) {
-        return "[RelayOps] " + alert.accountName() + " · " + label(alert.type());
+    /** Channels such as QQ groups subscribe to this; a broken subscriber must not fail the sweep. */
+    private void publish(AlertRules.Alert alert) {
+        try {
+            events.publishEvent(new com.relayops.notification.contract.event.AlertRaisedEvent(
+                    alert.accountId(), alert.accountName(), alert.type().name(), alert.message()));
+        } catch (RuntimeException ex) {
+            log.warn("发布告警事件失败: account={}, reason={}", alert.accountId(), ex.getMessage());
+        }
+    }
+
+    private String subjectOf(AlertRules.Alert alert) {        return "[RelayOps] " + alert.accountName() + " · " + label(alert.type());
     }
 
     private String bodyOf(AlertRules.Alert alert) {

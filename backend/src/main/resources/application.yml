@@ -159,6 +159,12 @@ relay-ops:
     webhook-token: ${RELAY_OPS_ONEBOT_WEBHOOK_TOKEN:}
     api-base-url: ${RELAY_OPS_ONEBOT_API_BASE_URL:http://localhost:3000}
     api-token: ${RELAY_OPS_ONEBOT_API_TOKEN:}
+    # 群白名单（逗号分隔）；留空表示不限制，建议正式部署时显式配置
+    allowed-groups: ${RELAY_OPS_ONEBOT_ALLOWED_GROUPS:}
+    # QQ 号白名单：这些人在群里被当作管理员（可查平台数据）
+    admin-users: ${RELAY_OPS_ONEBOT_ADMIN_USERS:}
+    # 主动告警推送目标群（逗号分隔）；留空则只发邮件
+    alert-groups: ${RELAY_OPS_ONEBOT_ALERT_GROUPS:}
     group-mention-required: ${RELAY_OPS_ONEBOT_REQUIRE_MENTION:true}
     timeout: ${RELAY_OPS_ONEBOT_TIMEOUT:5s}
   upstream:
