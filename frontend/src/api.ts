@@ -38,6 +38,11 @@ export const api = {
   snapshots: (id: number) => http.get('/upstream/accounts/' + id + '/snapshots'),
   collectRuns: () => http.get('/upstream/runs'),
   upstreamDashboard: () => http.get('/upstream/dashboard'),
+
+  monitoringOverview: () => http.get('/monitoring/overview'),
+  monitoringAbnormal: () => http.get('/monitoring/abnormal'),
+  monitoringTrend: (id: number, hours = 24) =>
+    http.get('/monitoring/accounts/' + id + '/trend', { params: { hours } }),
   memoryFacts: (params: unknown) => http.get('/assistant/memory/facts', { params }),
   recall: (body: unknown) => http.post('/assistant/memory/recall', body),
   remember: (body: unknown) => http.post('/assistant/memory/facts', body)
