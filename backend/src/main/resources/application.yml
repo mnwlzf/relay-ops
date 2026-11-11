@@ -14,6 +14,17 @@ server:
 spring:
   application:
     name: ${RELAY_OPS_APP_NAME:relay-ops-backend}
+  # 我们自建模型客户端（ModelRouter / BailianEmbeddingClient），不使用 Spring AI 的自动装配 bean。
+  # 不排除的话，未配置 API Key 时 OpenAI 自动装配会在启动阶段直接抛
+  # "OpenAI API key must be set"，导致服务起不来。
+  autoconfigure:
+    exclude:
+      - org.springframework.ai.model.openai.autoconfigure.OpenAiChatAutoConfiguration
+      - org.springframework.ai.model.openai.autoconfigure.OpenAiEmbeddingAutoConfiguration
+      - org.springframework.ai.model.openai.autoconfigure.OpenAiImageAutoConfiguration
+      - org.springframework.ai.model.openai.autoconfigure.OpenAiAudioSpeechAutoConfiguration
+      - org.springframework.ai.model.openai.autoconfigure.OpenAiAudioTranscriptionAutoConfiguration
+      - org.springframework.ai.model.openai.autoconfigure.OpenAiModerationAutoConfiguration
   config:
     import:
       - optional:file:.env[.properties]

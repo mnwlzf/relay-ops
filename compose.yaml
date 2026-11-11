@@ -68,6 +68,8 @@ services:
       RELAY_OPS_ONEBOT_ADMIN_USERS: ${RELAY_OPS_ONEBOT_ADMIN_USERS:-}
       RELAY_OPS_ONEBOT_ALERT_GROUPS: ${RELAY_OPS_ONEBOT_ALERT_GROUPS:-}
       RELAY_OPS_ONEBOT_REQUIRE_MENTION: ${RELAY_OPS_ONEBOT_REQUIRE_MENTION:-true}
+      # 自建模型客户端不使用 Spring AI 自动装配；不排除会在缺少 API Key 时启动失败
+      SPRING_AUTOCONFIGURE_EXCLUDE: org.springframework.ai.model.openai.autoconfigure.OpenAiChatAutoConfiguration,org.springframework.ai.model.openai.autoconfigure.OpenAiEmbeddingAutoConfiguration,org.springframework.ai.model.openai.autoconfigure.OpenAiImageAutoConfiguration,org.springframework.ai.model.openai.autoconfigure.OpenAiAudioSpeechAutoConfiguration,org.springframework.ai.model.openai.autoconfigure.OpenAiAudioTranscriptionAutoConfiguration,org.springframework.ai.model.openai.autoconfigure.OpenAiModerationAutoConfiguration
       # 模型与向量（留空即关闭自然语言/向量能力）
       SPRING_AI_MODEL_CHAT: ${SPRING_AI_MODEL_CHAT:-none}
       SPRING_AI_OPENAI_API_KEY: ${SPRING_AI_OPENAI_API_KEY:-}
