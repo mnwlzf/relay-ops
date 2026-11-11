@@ -64,17 +64,27 @@ public class AlertService {
                     staleBefore, now, properties.alerts().cooldown()));
         }
 
-        for (AlertRules.Alert alert : alerts) {
+        var silences = store.activeSilences(now);
+        var deliverable = alerts.stream()
+                .filter(alert -> silences.stream()
+                        .noneMatch(rule -> rule.matches(alert.accountId(), alert.type(), now)))
+                .toList();
+        if (deliverable.size() < alerts.size()) {
+            log.info("静默规则抑制了 {} 条告警", alerts.size() - deliverable.size());
+        }
+        for (AlertRules.Alert alert : deliverable) {
             notifications.send(new NotificationPort.NotificationCommand("email",
                     properties.mail().to(), "alert",
                     Map.of("subject", subjectOf(alert), "body", bodyOf(alert))));
             store.record(alert.accountId(), alert.type().name(), now, alert.message());
+            store.saveHistory(alert.accountId(), alert.accountName(), alert.type().name(),
+                    alert.message(), "EMAIL,QQ", now);
             publish(alert);
         }
-        if (!alerts.isEmpty()) {
-            log.info("已发送告警: count={}", alerts.size());
+        if (!deliverable.isEmpty()) {
+            log.info("已发送告警: count={}", deliverable.size());
         }
-        return alerts.size();
+        return deliverable.size();
     }
 
     /** Channels such as QQ groups subscribe to this; a broken subscriber must not fail the sweep. */
