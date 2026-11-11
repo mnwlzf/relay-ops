@@ -1,5 +1,38 @@
 # 部署与运维（VPS）
 
+## 部署形态由配置决定
+
+`compose.yaml` 里 postgres / redis / napcat 都带 profile，默认**不会**全部启动：
+
+| `.env` 里的 `COMPOSE_PROFILES` | 启动内容 | 适用场景 |
+|---|---|---|
+| `local-deps,napcat` | app + web + postgres + redis + napcat | 一台机器一键全包（默认） |
+| `napcat` | app + web + napcat | 数据库/Redis 用外部服务 |
+| 空 | app + web | 只部署应用，依赖全用外部 |
+
+外部模式需要把地址改成容器可达的：
+
+```dotenv
+COMPOSE_PROFILES=
+RELAY_OPS_DB_URL=jdbc:postgresql://host.docker.internal:5432/relay_ops
+RELAY_OPS_REDIS_HOST=host.docker.internal
+```
+
+- `host.docker.internal` 由 compose 的 `extra_hosts: host-gateway` 提供，指向宿主机；
+- 若外部数据库是另一个 compose 项目的容器，把两个项目接到同一网络，地址写那个容器名；
+- `app` 对 postgres/redis 的依赖是 `required: false`，依赖服务不存在时不会阻止启动。
+
+从"自带依赖"切到"外部依赖"时，数据需要迁移：
+
+```bash
+docker exec relay-ops-postgres-1 pg_dump -U relay_ops relay_ops | gzip > /app/relay_ops/backup.sql.gz
+# 在外部库建库并恢复
+gunzip -c /app/relay_ops/backup.sql.gz | psql -h <外部库> -U <用户> -d relay_ops
+# 改 .env 的 COMPOSE_PROFILES 与地址，然后
+docker compose ... up -d --remove-orphans
+# 确认无误后再删除自带依赖容器与数据卷
+```
+
 ## 目录布局
 
 ```text

@@ -2,6 +2,8 @@ name: relay-ops
 
 services:
   postgres:
+    # 只在启用 local-deps profile 时启动；用外部数据库时不要开
+    profiles: ["local-deps"]
     # pgvector image: assistant memory needs the vector extension (see docs/refactor-scheduling-and-assistant.md 3.4).
     image: pgvector/pgvector:pg18-trixie
     environment:
@@ -19,6 +21,8 @@ services:
       retries: 20
 
   redis:
+    # 同上：用外部 Redis 时不要开 local-deps
+    profiles: ["local-deps"]
     image: redis:7.4-alpine
     command: ["redis-server", "--appendonly", "yes"]
     ports:
@@ -36,13 +40,13 @@ services:
     build:
       context: ./backend
     environment:
-      # 容器内用服务名互相访问，覆盖 .env 里给宿主机用的 localhost 地址
-      RELAY_OPS_DB_URL: jdbc:postgresql://postgres:5432/${RELAY_OPS_DB_NAME:-relay_ops}
+      # 默认连 local-deps 里的 postgres；用外部库时在 .env 覆盖 RELAY_OPS_DB_URL
+      RELAY_OPS_DB_URL: ${RELAY_OPS_DB_URL:-jdbc:postgresql://postgres:5432/relay_ops}
       RELAY_OPS_DB_USERNAME: ${RELAY_OPS_DB_USERNAME:-relay_ops}
       RELAY_OPS_DB_PASSWORD: ${RELAY_OPS_DB_PASSWORD:-relay_ops}
       RELAY_OPS_DB_IDLE_TIMEOUT: ${RELAY_OPS_DB_IDLE_TIMEOUT:-120000}
-      RELAY_OPS_REDIS_HOST: redis
-      RELAY_OPS_REDIS_PORT: "6379"
+      RELAY_OPS_REDIS_HOST: ${RELAY_OPS_REDIS_HOST:-redis}
+      RELAY_OPS_REDIS_PORT: ${RELAY_OPS_REDIS_PORT:-6379}
       RELAY_OPS_REDIS_PASSWORD: ${RELAY_OPS_REDIS_PASSWORD:-}
       RELAY_OPS_TIMEZONE: ${RELAY_OPS_TIMEZONE:-Asia/Shanghai}
       RELAY_OPS_DEV_OPEN_API: ${RELAY_OPS_DEV_OPEN_API:-false}
@@ -64,7 +68,7 @@ services:
       # OneBot：容器内直连 napcat 服务
       RELAY_OPS_ONEBOT_ENABLED: ${RELAY_OPS_ONEBOT_ENABLED:-false}
       RELAY_OPS_ONEBOT_WEBHOOK_TOKEN: ${RELAY_OPS_ONEBOT_WEBHOOK_TOKEN:-}
-      RELAY_OPS_ONEBOT_API_BASE_URL: http://napcat:3000
+      RELAY_OPS_ONEBOT_API_BASE_URL: ${RELAY_OPS_ONEBOT_API_BASE_URL:-http://napcat:3000}
       RELAY_OPS_ONEBOT_API_TOKEN: ${RELAY_OPS_ONEBOT_API_TOKEN:-}
       RELAY_OPS_ONEBOT_ALLOWED_GROUPS: ${RELAY_OPS_ONEBOT_ALLOWED_GROUPS:-}
       RELAY_OPS_ONEBOT_ADMIN_USERS: ${RELAY_OPS_ONEBOT_ADMIN_USERS:-}
@@ -86,10 +90,16 @@ services:
     ports:
       - "${RELAY_OPS_SERVER_PORT:-8080}:8080"
     depends_on:
+      # required: false —— 用外部数据库/Redis 时这些服务不存在，不该阻止 app 启动
       postgres:
         condition: service_healthy
+        required: false
       redis:
         condition: service_healthy
+        required: false
+    extra_hosts:
+      # 外部服务跑在宿主机上时可用 host.docker.internal 访问
+      - "host.docker.internal:host-gateway"
     restart: unless-stopped
 
   # 控制台：Nginx 托管前端静态资源，并把 /api 同源反代到 app
@@ -105,6 +115,8 @@ services:
   # QQ 侧接入：OneBot v11 实现。首次启动需要扫码登录（无法自动化），
   # 之后在 NapCat WebUI 里配置「HTTP 服务端(3000)」与「反向 HTTP 上报」。
   napcat:
+    # 只在启用 napcat profile 时启动（不用 QQ 机器人就不要开）
+    profiles: ["napcat"]
     image: mlikiowa/napcat-docker:latest
     environment:
       NAPCAT_ACCOUNT: ${NAPCAT_ACCOUNT:-}
