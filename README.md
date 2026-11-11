@@ -47,13 +47,15 @@ application service 实现。
 
 ## 一键部署（全容器）
 
-要求：Docker（Compose v2）。后端镜像由 `backend/Dockerfile` 多阶段构建，不需要本机 JDK。
+要求：Docker（Compose v2）。根目录 `Dockerfile` 三阶段构建**一体化镜像**（前端产物打进后端 jar），
+不需要本机 JDK/Node，也不额外起 Nginx 容器。
 
 ```powershell
 Copy-Item .env.example .env
 # 打开 .env，至少确认：
 #   RELAY_OPS_DB_PASSWORD / RELAY_OPS_CREDENTIAL_KEY（账号凭证加密）
-#   RELAY_OPS_DEV_OPEN_API=true（identity 未落地前靠它访问控制台；生产务必 false）
+#   RELAY_OPS_ADMIN_PASSWORD（控制台管理员，首次启动创建）
+#   COMPOSE_PROFILES=local-deps,napcat（想用外部数据库就留空并填 DB_URL/REDIS_HOST）
 docker compose up -d --build
 ```
 
@@ -61,16 +63,13 @@ docker compose up -d --build
 
 | 地址 | 说明 |
 |---|---|
-| `http://localhost:8088` | 控制台（Nginx 容器，`/api` 同源反代到后端） |
-| `http://localhost:8080/actuator/health` | 健康检查 |
-| `http://localhost:8080/api/...` | 管理 API（需要 `RELAY_OPS_DEV_OPEN_API=true` 或登录） |
+| `http://localhost:8088` | 控制台 + API（同一容器，同源） |
+| `http://localhost:8088/actuator/health` | 健康检查 |
 | `http://127.0.0.1:6099` | NapCat WebUI（`NAPCAT_WEBUI_TOKEN`） |
 
 `app` 服务内部用容器名访问依赖：数据库 `postgres:5432`、Redis `redis:6379`、OneBot `napcat:3000`，
-因此 `.env` 里给宿主机用的 `localhost` 地址不会影响容器内的连通性。
-
-> 控制台页面本身不需要 CORS（同源反代），但 `identity` 还没落地，`/api/**` 仍要求登录；
-> 首次试用请在 `.env` 里设 `RELAY_OPS_DEV_OPEN_API=true`。
+因此 `.env` 里给宿主机用的地址不会影响容器内的连通性。生产覆盖（`compose.prod.yaml`）还会把
+PostgreSQL 发布到 `15342`、Redis 发布到 `16379`，两者都强制密码认证。
 
 ## 本机开发
 

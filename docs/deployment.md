@@ -77,10 +77,10 @@ Flyway 迁移在应用启动时自动执行。
 
 | 端口 | 暴露 | 说明 |
 |---|---|---|
-| 8088 | 公网 | 控制台（Nginx），`/api` 同源反代到 app |
+| 8088 | 公网 | 控制台 + API（一体化容器，`app` 直接监听 8080） |
 | 15342 | 公网 | PostgreSQL（→ 容器 5432），**必须密码**，`scram-sha-256` |
-| 16379 | 公网 | Redis（→ 容器 6379），**必须 AUTH**（`requirepass`） |
-| 8080 | 容器内 | 后端，不对外 |
+| 16379 | 公网 | Redis（→ 容器 6379），**必须 AUTH**（ACL 账号） |
+| 8080 | 容器内 | 后端（含静态资源），不单独发布 |
 | 6099 | 127.0.0.1 | NapCat WebUI，需 SSH 隧道访问 |
 | 13000 | 127.0.0.1 | NapCat HTTP 服务，供调试 |
 
@@ -91,36 +91,41 @@ Flyway 迁移在应用启动时自动执行。
 外部连接示例：
 
 ```bash
-# PostgreSQL
-psql "host=117.55.228.245 port=15342 user=relay_ops dbname=relay_ops sslmode=prefer"
-# 或 JDBC
+# PostgreSQL（root 超级用户，用于运维；应用自身仍用 relay_ops 最小权限账号）
+psql "host=117.55.228.245 port=15342 user=root dbname=relay_ops"
+# JDBC
 jdbc:postgresql://117.55.228.245:15342/relay_ops
 
-# Redis
-redis-cli -h 117.55.228.245 -p 16379 -a '<RELAY_OPS_REDIS_PASSWORD>' --no-auth-warning ping
+# Redis（ACL 账号 admin）
+redis-cli -h 117.55.228.245 -p 16379 --user admin -a '<RELAY_OPS_REDIS_PASSWORD>' --no-auth-warning ping
 ```
 
 ## 数据库与 Redis 的安全措施
 
-1. **口令**：`RELAY_OPS_DB_PASSWORD` 与 `RELAY_OPS_REDIS_PASSWORD` 均为随机生成，只存在
-   `/app/relay_ops/src/.env`（权限 `600`），不进仓库；
-2. **PostgreSQL**：官方镜像启用 `scram-sha-256`，无密码连接被拒绝
-   （实测报 `fe_sendauth: no password supplied`）；
-3. **Redis**：启动参数带 `--requirepass`，无认证命令被拒绝
-   （实测报 `NOAUTH Authentication required.`）；
-4. **建议再加一层网络限制**：云厂商安全组或 `ufw` 只放行你自己的 IP 访问 15342/16379，
+1. **账号分离**：
+   - PostgreSQL：应用用 `relay_ops`（最小权限），运维用 `root`（超级用户，仅排障用）；
+   - Redis：默认账号保留密码，另建 ACL 账号 `admin`，应用以 `admin` 连接
+     （`RELAY_OPS_REDIS_USERNAME` / `RELAY_OPS_REDIS_PASSWORD`）。
+2. **口令**：均随机生成，只存在 `/app/relay_ops/src/.env`（权限 `600`），不进仓库；
+3. **PostgreSQL**：官方镜像启用 `scram-sha-256`，无密码连接被拒绝
+   （实测 `fe_sendauth: no password supplied`）；
+4. **Redis**：配置文件里写 `requirepass` 与 `user admin ...`，无认证命令被拒绝
+   （实测 `NOAUTH Authentication required.`，`ACL WHOAMI` 返回 `admin`）；
+5. **建议再加一层网络限制**：云厂商安全组或 `ufw` 只放行你自己的 IP 访问 15342/16379，
    密码是第二道防线，不是唯一防线。
 
 验证命令（在服务器上执行）：
 
 ```bash
-# 有密码应成功、无密码应失败
-PGPASSWORD='<密码>' docker exec -e PGPASSWORD relay-ops-postgres-1 \
+# PostgreSQL：应用账号与 root 都能连，无密码必须失败
+PGPASSWORD='<应用密码>' docker exec -e PGPASSWORD relay-ops-postgres-1 \
   psql "host=127.0.0.1 port=15342 user=relay_ops dbname=relay_ops" -tAc 'select 1'
+PGPASSWORD='<root密码>' docker exec -e PGPASSWORD relay-ops-postgres-1 \
+  psql "host=127.0.0.1 port=15342 user=root dbname=relay_ops" -tAc 'select current_user'
 
-# 无密码应 NOAUTH，带密码应 PONG
+# Redis：无密码应 NOAUTH，admin 账号应 PONG
 docker exec relay-ops-redis-1 redis-cli -h 127.0.0.1 -p 16379 ping
-docker exec relay-ops-redis-1 redis-cli -h 127.0.0.1 -p 16379 -a '<密码>' --no-auth-warning ping
+docker exec relay-ops-redis-1 redis-cli -h 127.0.0.1 -p 16379 --user admin -a '<密码>' --no-auth-warning ping
 ```
 
 NapCat WebUI 只绑本机，访问方式：
