@@ -1562,6 +1562,27 @@ org.quartz.jobStore.useProperties: true
 连真实数据库验证过启动、迁移与调度（见第 26 节）。首次在有 Docker 的机器上执行
 `docker compose up -d --build` 时，注意观察 `app` 容器日志的迁移与 Quartz 注册。
 
+---
+
+## 28. 控制台进容器（2026-11-11）
+
+| 部件 | 说明 |
+|---|---|
+| `frontend/Dockerfile` | Node 22 构建 → `nginx:1.27-alpine` 托管；两阶段，运行镜像不含 node |
+| `frontend/nginx.conf` | SPA 回落 `index.html`；`/api/` 与 `/actuator/` 反代到 `app:8080` |
+| `compose.yaml` 的 `web` | 端口 `${RELAY_OPS_WEB_PORT:-8088}:80`，依赖 `app` |
+| `frontend/.dockerignore` | 排除 `node_modules/`、`dist/` |
+
+两个判断：
+
+1. **同源反代而不是 CORS**：浏览器访问 `:8088`，`/api` 由 Nginx 在服务端转发到 `app`，
+   页面与接口同源 —— 不需要开 CORS，也不需要把后端端口暴露给浏览器。
+2. **运行镜像里没有 Node**：静态资源在构建阶段产出，运行阶段只有 Nginx，
+   镜像更小、攻击面更小；`npm ci` 用锁文件保证可重复构建。
+
+现在一条 `docker compose up -d --build` 会起：`postgres`（pgvector）、`redis`、`app`（后端）、
+`web`（控制台）、`napcat`（QQ 接入）。仍未实跑验证的部分：三个镜像的构建（本机无 Docker CLI）。
+
 
 
 
