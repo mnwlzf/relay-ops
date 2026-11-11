@@ -1,0 +1,12 @@
+# 镜像部署覆盖：不构建，直接拉 GHCR 上的镜像（由 .github/workflows/images.yml 产出）
+# 用法：docker compose -f compose.yaml -f compose.prod.yaml -f compose.ghcr.yaml up -d
+services:
+  app:
+    image: ghcr.io/mnwlzf/relay-ops-backend:${RELAY_OPS_IMAGE_TAG:-latest}
+    build: !reset null
+    pull_policy: always
+
+  web:
+    image: ghcr.io/mnwlzf/relay-ops-web:${RELAY_OPS_IMAGE_TAG:-latest}
+    build: !reset null
+    pull_policy: always
