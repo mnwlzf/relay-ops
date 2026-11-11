@@ -1658,6 +1658,29 @@ org.quartz.jobStore.useProperties: true
 
 验收：`mvn test` **196 项全绿**（新增 4 项静默规则、3 项账号映射、4 项节流），前端构建通过。
 
+---
+
+## 31. 机器人配置可见性与 webhook 放行（2026-11-11）
+
+修了一个会直接让机器人"不回应"的缺陷：
+
+> `SecurityConfig` 只放行了健康检查与登录接口，OneBot 的 webhook（`POST /api/v1/integration/onebot`）
+> 在 `dev-open=false` 时被 Spring Security 拦成 401 —— 控制器自己的 Bearer token 校验根本没机会执行。
+> 本地因为开着 `dev-open` 所以看不出来，生产一关就哑。
+
+现在显式放行该路径：它有自己的 token 校验（失败关闭、常量时间比较），不需要控制台登录态。
+
+同时加了配置可见性，避免"改完 .env 不知道有没有生效"：
+
+| 部件 | 说明 |
+|---|---|
+| `GET /api/v1/assistant/onebot/status` | 开关、可用性、API 地址、两个 token 是否配置、白名单/管理员/告警群、分片与节流参数，外加针对性提示 |
+| `POST /api/v1/assistant/onebot/test` | 向指定群（或第一个告警群）发一条测试消息，验证"后端 → NapCat → QQ"方向 |
+| 前端「机器人」页 | 状态表 + 提示 + 测试发送 + 环境变量清单 |
+
+判断：**测试只覆盖发送方向**。反向（群消息 → 后端）依赖 NapCat 的"反向 HTTP 上报"配置，
+无法由后端验证，页面上明确写清这一点，避免把"测试成功"误当成"整条链路都通了"。
+
 
 
 
