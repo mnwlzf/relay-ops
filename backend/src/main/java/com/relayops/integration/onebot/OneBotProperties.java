@@ -14,6 +14,9 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
  * @param allowedGroups      comma separated group ids; empty means "no restriction"
  * @param adminUsers         comma separated QQ ids treated as platform admins inside QQ
  * @param alertGroups        comma separated group ids that receive proactive alerts
+ * @param maxMessageChars    soft limit per outbound message chunk
+ * @param maxSegments        hard cap on chunks per message
+ * @param sendInterval       minimum gap between two outbound messages, protects the QQ account
  * @param groupMentionRequired whether to ignore group messages that do not @ the bot
  */
 @ConfigurationProperties(prefix = "relay-ops.onebot")
@@ -25,6 +28,9 @@ public record OneBotProperties(
         String allowedGroups,
         String adminUsers,
         String alertGroups,
+        Integer maxMessageChars,
+        Integer maxSegments,
+        Duration sendInterval,
         Boolean groupMentionRequired,
         Duration timeout
 ) {
@@ -37,6 +43,10 @@ public record OneBotProperties(
         allowedGroups = allowedGroups == null ? "" : allowedGroups.strip();
         adminUsers = adminUsers == null ? "" : adminUsers.strip();
         alertGroups = alertGroups == null ? "" : alertGroups.strip();
+        maxMessageChars = maxMessageChars == null || maxMessageChars < 50 ? 1000 : maxMessageChars;
+        maxSegments = maxSegments == null || maxSegments < 1 ? 5 : Math.min(maxSegments, 10);
+        sendInterval = sendInterval == null || sendInterval.isNegative()
+                ? Duration.ofMillis(500) : sendInterval;
         groupMentionRequired = groupMentionRequired == null || groupMentionRequired;
         timeout = timeout == null ? Duration.ofSeconds(5) : timeout;
     }

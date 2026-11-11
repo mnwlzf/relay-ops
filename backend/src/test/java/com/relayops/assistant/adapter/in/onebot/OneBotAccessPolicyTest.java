@@ -11,7 +11,8 @@ class OneBotAccessPolicyTest {
 
     private static OneBotProperties properties(String allowedGroups, String adminUsers) {
         return new OneBotProperties(true, "token", "http://localhost:3000", "",
-                allowedGroups, adminUsers, "200,300", true, Duration.ofSeconds(5));
+                allowedGroups, adminUsers, "200,300", 1000, 5,
+                java.time.Duration.ofMillis(500), true, Duration.ofSeconds(5));
     }
 
     private static OneBotEvent group(long groupId, long userId) {
