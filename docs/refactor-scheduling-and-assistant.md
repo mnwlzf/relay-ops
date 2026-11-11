@@ -1608,6 +1608,56 @@ org.quartz.jobStore.useProperties: true
 - 分片失败的中途重试（目前每段独立发送，失败只记日志）
 - 按群独立节流（现在是全局间隔）
 
+---
+
+## 30. 四项补齐：并发、重试、告警历史、账号登录（2026-11-11）
+
+### 采集并发（`upstream`）
+
+`CollectionService` 改为固定线程池（`RELAY_OPS_COLLECT_CONCURRENCY`，默认 4，上限 16），
+结果按输入顺序回填，失败/超时/中断都落到该账号的快照上。判断：账号多时串行会把一轮采集拖成
+分钟级，但无上限并发会触发上游限流 —— 4 是保守起点，可按部署调。
+
+### 分片重试与按目标节流（`onebot`）
+
+- 每片最多重试 `RELAY_OPS_ONEBOT_RETRY_MAX`（默认 1）次，退避 200ms×次数；
+- `SendThrottle` 按"目标"（群/私聊）独立计时，一个忙碌的群不会拖慢另一个；
+- 部分分片失败只记 WARN 并继续，不放弃后续分片。
+
+### 告警历史与静默（`notification` + web）
+
+| 部件 | 说明 |
+|---|---|
+| `V10` | `notification_alert_history`、`notification_silence_rule` |
+| `AlertStore` | 新增历史读写与静默规则；`SilenceRule.matches` 是纯函数 |
+| `AlertService` | 发送前过滤被静默的告警，发送后写历史（记录通道 `EMAIL,QQ`） |
+| `/api/v1/notification/{alerts,silences}` | 历史查询、静默增删 |
+| 前端「告警」页 | 历史表 + 静默规则增删 |
+
+关键取舍：**静默只影响发送，不影响判定与历史**。维护窗口内仍能看到"本该告警"的记录，
+窗口结束后自动恢复推送 —— 否则静默期成了盲区。
+
+### 控制台账号（`identity` + web）
+
+| 部件 | 说明 |
+|---|---|
+| `V11` | `identity_user`（BCrypt 哈希、角色 ADMIN/OPERATOR/VIEWER） |
+| `IdentityBootstrap` | 库中无账号且设置了 `RELAY_OPS_ADMIN_PASSWORD` 时创建默认管理员 |
+| `DbUserDetailsService` | 账号 → Spring Security 主体，角色映射 `ROLE_<role>` |
+| `AuthController` | `POST /api/v1/auth/login`（JSON）、`GET /me`、`POST /logout`，会话存 Redis |
+| `SecurityConfig` | `/api/**` 需认证，未认证返回 401（不重定向）；`dev-open` 仍可整体放行 |
+| 前端 | 登录页 + 路由守卫 + 顶栏账号/退出 |
+
+三条判断：
+
+1. **不内置默认密码**：没设 `RELAY_OPS_ADMIN_PASSWORD` 就不创建账号并告警，
+   宁可登录不可用，也不发一个已知口令。
+2. **JSON 登录而不是表单登录**：SPA 拿不到 CSRF token，表单提交还会 302 到 HTML 页面；
+   这里显式把 `SecurityContext` 存进会话。
+3. **`dev-open` 保留但默认关闭**：本地联调仍然方便，生产环境由 `.env` 决定，不靠代码判断。
+
+验收：`mvn test` **196 项全绿**（新增 4 项静默规则、3 项账号映射、4 项节流），前端构建通过。
+
 
 
 
