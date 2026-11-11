@@ -1,0 +1,36 @@
+# 生产部署覆盖：只暴露控制台，其余端口留在容器网络内。
+# 用法：docker compose -f compose.yaml -f compose.prod.yaml up -d --build
+#
+# 与默认 compose 的差别：
+#   - postgres/redis 不映射到宿主机（数据库不对公网开放）
+#   - app 不映射端口，只由 web 的 Nginx 反代
+#   - napcat 的 HTTP 与 WebUI 只绑 127.0.0.1，避免 QQ 协议端口暴露
+#   - 所有持久化数据落在 ./data 下
+services:
+  postgres:
+    ports: !reset []
+    volumes:
+      - ./data/postgres:/var/lib/postgresql/data
+
+  redis:
+    ports: !reset []
+    volumes:
+      - ./data/redis:/data
+
+  app:
+    ports: !reset []
+    volumes:
+      - ./data/logs:/app/logs
+    environment:
+      JAVA_OPTS: ${RELAY_OPS_JAVA_OPTS:--Xms128m -Xmx512m -XX:MaxRAMPercentage=60 -XX:+UseG1GC}
+
+  web:
+    ports:
+      - "${RELAY_OPS_WEB_PORT:-8088}:80"
+
+  napcat:
+    ports:
+      - "127.0.0.1:${NAPCAT_HTTP_PORT:-13000}:3000"
+      - "127.0.0.1:${NAPCAT_WEBUI_PORT:-6099}:6099"
+    volumes:
+      - ./data/napcat:/app/napcat
