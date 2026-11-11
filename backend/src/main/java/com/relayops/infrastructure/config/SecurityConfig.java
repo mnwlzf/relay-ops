@@ -44,6 +44,9 @@ public class SecurityConfig {
                     authorize.requestMatchers(HttpMethod.GET, "/actuator/health", "/actuator/health/**",
                             "/actuator/info").permitAll();
                     authorize.requestMatchers(HttpMethod.POST, "/api/v1/auth/login").permitAll();
+                    // OneBot 反向上报带自己的 Bearer token 校验（见 OneBotWebhookController），
+                    // 不能要求控制台登录态，否则 NapCat 的 POST 会被拦成 401。
+                    authorize.requestMatchers(HttpMethod.POST, "/api/v1/integration/onebot").permitAll();
                     if (properties.devOpen()) {
                         authorize.requestMatchers("/api/**").permitAll();
                     }
