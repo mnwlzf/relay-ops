@@ -14,12 +14,17 @@
 #      ../data 就是 /app/relay_ops/data。
 services:
   postgres:
-    ports: !reset []
+    # 外部访问：15342 -> 5432，必须带密码（scram-sha-256），无密码会被拒绝
+    ports: !override
+      - "${RELAY_OPS_DB_PUBLISH_PORT:-15342}:5432"
     volumes: !override
       - ${RELAY_OPS_DATA_DIR:-../data}/postgres:/var/lib/postgresql
 
   redis:
-    ports: !reset []
+    # 外部访问：16379 -> 6379，必须 AUTH（requirepass 由 RELAY_OPS_REDIS_PASSWORD 注入）
+    ports: !override
+      - "${RELAY_OPS_REDIS_PUBLISH_PORT:-16379}:6379"
+    command: ["redis-server", "--appendonly", "yes", "--requirepass", "${RELAY_OPS_REDIS_PASSWORD:-}"]
     volumes: !override
       - ${RELAY_OPS_DATA_DIR:-../data}/redis:/data
 
