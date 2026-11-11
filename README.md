@@ -61,12 +61,16 @@ docker compose up -d --build
 
 | 地址 | 说明 |
 |---|---|
+| `http://localhost:8088` | 控制台（Nginx 容器，`/api` 同源反代到后端） |
 | `http://localhost:8080/actuator/health` | 健康检查 |
 | `http://localhost:8080/api/...` | 管理 API（需要 `RELAY_OPS_DEV_OPEN_API=true` 或登录） |
 | `http://127.0.0.1:6099` | NapCat WebUI（`NAPCAT_WEBUI_TOKEN`） |
 
 `app` 服务内部用容器名访问依赖：数据库 `postgres:5432`、Redis `redis:6379`、OneBot `napcat:3000`，
 因此 `.env` 里给宿主机用的 `localhost` 地址不会影响容器内的连通性。
+
+> 控制台页面本身不需要 CORS（同源反代），但 `identity` 还没落地，`/api/**` 仍要求登录；
+> 首次试用请在 `.env` 里设 `RELAY_OPS_DEV_OPEN_API=true`。
 
 ## 本机开发
 
@@ -96,6 +100,10 @@ http://localhost:8080/actuator/health
 Prometheus 指标默认要求认证；健康检查接口允许匿名访问。
 
 ## 前端控制台（Vue 3 + Element Plus）
+
+两种用法：全容器部署时由 Nginx 托管（见上面的 `web` 服务，端口 `RELAY_OPS_WEB_PORT`，默认 8088）；
+本机开发时用 Vite：
+
 ```powershell
 cd frontend
 npm install
