@@ -43,6 +43,7 @@ export const api = {
   blueprintPreview: (id: number, body: unknown) => http.post(`/assistant/blueprints/${id}/preview`, body),
 
   platforms: () => http.get('/upstream/platforms'),
+  createPlatform: (body: unknown) => http.post('/upstream/platforms', body),
   upstreamAccounts: () => http.get('/upstream/accounts'),
   createUpstreamAccount: (body: unknown) => http.post('/upstream/accounts', body),
   collectNow: () => http.post('/upstream/collect'),

@@ -5,18 +5,30 @@
       <el-button size="small" style="float: right" :loading="loading" @click="load">刷新</el-button>
     </template>
     <div class="toolbar">
-      <el-select v-model="platformCode" placeholder="平台" style="width: 190px">
+      <el-select v-model="platformCode" placeholder="平台" style="width: 230px">
         <el-option v-for="item in platforms" :key="item.code"
-                   :label="`${item.name}（${item.type}）`" :value="item.code" />
+                   :label="`${item.name}（${item.type}）${item.enabled ? '' : ' · 停用'}`"
+                   :value="item.code" />
       </el-select>
       <el-input v-model="name" placeholder="账号名称" style="width: 150px" />
       <el-input v-model="login" placeholder="登录名 / 用户 ID" style="width: 170px" />
-      <el-input v-model="credential" placeholder="凭证（Token，加密存储）" style="width: 240px" show-password />
+      <el-input v-model="credential" placeholder="凭证（Token，必填，加密存储）" style="width: 240px" show-password />
       <el-button :loading="saving" @click="createAccount">添加账号</el-button>
       <el-button type="primary" :loading="collecting" @click="collect">立即采集</el-button>
     </div>
+    <div class="toolbar">
+      <span class="muted">新增平台：</span>
+      <el-input v-model="platformForm.code" placeholder="编码，如 my-newapi" style="width: 180px" />
+      <el-input v-model="platformForm.name" placeholder="名称" style="width: 150px" />
+      <el-select v-model="platformForm.type" style="width: 140px">
+        <el-option label="New API" value="NEWAPI" />
+        <el-option label="Sub2API" value="SUB2API" />
+      </el-select>
+      <el-input v-model="platformForm.baseUrl" placeholder="基础地址，如 https://api.example.com" style="width: 280px" />
+      <el-button :loading="savingPlatform" @click="createPlatform">保存平台</el-button>
+    </div>
     <el-alert v-if="!platforms.length" type="info" :closable="false" show-icon
-              title="还没有平台：迁移会种一个停用的「演示 New API」，可先把它启用或新增一个。" />
+              title="还没有平台：用上面这行新增一个（New API / Sub2API），或启用迁移里种的演示平台。" />
     <el-table :data="accounts" v-loading="loading" size="small" style="margin-top: 12px"
               empty-text="还没有账号">
       <el-table-column prop="name" label="账号" min-width="140" />
@@ -71,7 +83,7 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { onMounted, reactive, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import { api } from '../api'
 
@@ -88,6 +100,28 @@ const loading = ref(false)
 const saving = ref(false)
 const collecting = ref(false)
 const drawer = ref(false)
+const savingPlatform = ref(false)
+const platformForm = reactive({ code: '', name: '', type: 'NEWAPI', baseUrl: '' })
+
+async function createPlatform() {
+  if (!platformForm.code.trim() || !platformForm.name.trim() || !platformForm.baseUrl.trim()) {
+    ElMessage.warning('平台编码、名称、基础地址都要填')
+    return
+  }
+  savingPlatform.value = true
+  try {
+    await api.createPlatform({ ...platformForm })
+    ElMessage.success('平台已添加')
+    platformForm.code = ''
+    platformForm.name = ''
+    platformForm.baseUrl = ''
+    await load()
+  } catch (error) {
+    ElMessage.error((error as Error).message)
+  } finally {
+    savingPlatform.value = false
+  }
+}
 
 async function load() {
   loading.value = true
@@ -106,6 +140,19 @@ async function load() {
 }
 
 async function createAccount() {
+  // 先在前端把空值挡住：后端只会回一句"凭证不能为空"，看不出是哪个框没填
+  if (!platformCode.value) {
+    ElMessage.warning('请先选择平台')
+    return
+  }
+  if (!name.value.trim()) {
+    ElMessage.warning('请填写账号名称')
+    return
+  }
+  if (!credential.value.trim()) {
+    ElMessage.warning('请填写凭证（Token）—— 这个字段是必填的')
+    return
+  }
   saving.value = true
   try {
     await api.createUpstreamAccount({
