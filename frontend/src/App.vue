@@ -17,6 +17,7 @@
         <el-menu-item index="/blueprints">消息蓝图</el-menu-item>
         <el-menu-item index="/memory">记忆</el-menu-item>
         <el-menu-item index="/alerts">告警</el-menu-item>
+        <el-menu-item index="/bot">机器人</el-menu-item>
       </el-menu>
     </el-aside>
     <el-container>

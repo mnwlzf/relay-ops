@@ -18,6 +18,9 @@ export const api = {
   authLogin: (username: string, password: string) => http.post('/auth/login', { username, password }),
   authLogout: () => http.post('/auth/logout'),
 
+  onebotStatus: () => http.get('/assistant/onebot/status'),
+  onebotTest: (groupId: number | null) => http.post('/assistant/onebot/test', { groupId }),
+
   alertHistory: (limit = 50) => http.get('/notification/alerts', { params: { limit } }),
   silences: () => http.get('/notification/silences'),
   addSilence: (body: unknown) => http.post('/notification/silences', body),

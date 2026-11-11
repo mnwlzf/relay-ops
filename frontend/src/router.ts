@@ -9,6 +9,7 @@ import CollectionView from './views/CollectionView.vue'
 import OverviewView from './views/OverviewView.vue'
 import MonitoringView from './views/MonitoringView.vue'
 import AlertsView from './views/AlertsView.vue'
+import BotView from './views/BotView.vue'
 import LoginView from './views/LoginView.vue'
 import { api } from './api'
 
@@ -26,7 +27,8 @@ export const router = createRouter({
     { path: '/personas', name: 'personas', component: PersonasView, meta: { title: '人设与提示词' } },
     { path: '/blueprints', name: 'blueprints', component: BlueprintsView, meta: { title: '消息蓝图' } },
     { path: '/memory', name: 'memory', component: MemoryView, meta: { title: '记忆' } },
-    { path: '/alerts', name: 'alerts', component: AlertsView, meta: { title: '告警' } }
+    { path: '/alerts', name: 'alerts', component: AlertsView, meta: { title: '告警' } },
+    { path: '/bot', name: 'bot', component: BotView, meta: { title: '机器人' } }
   ]
 })
 
