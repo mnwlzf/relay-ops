@@ -33,7 +33,7 @@ class CollectionServiceTest {
     }
 
     private static CollectionService service(FakeStore store, UpstreamClient... clients) {
-        return new CollectionService(store, CIPHER, List.of(clients), TIME, event -> { });
+        return new CollectionService(store, CIPHER, List.of(clients), TIME, event -> { }, 2);
     }
 
     private static UpstreamClient okClient() {
@@ -121,7 +121,7 @@ class CollectionServiceTest {
         FakeStore store = new FakeStore();
         store.accounts.add(account(1, PlatformType.NEWAPI, true));
         CollectionService service = new CollectionService(store, new CredentialCipher(""),
-                List.of(okClient()), TIME, event -> { });
+                List.of(okClient()), TIME, event -> { }, 2);
 
         CollectionService.Summary summary = service.collectAll("MANUAL");
 
@@ -135,7 +135,7 @@ class CollectionServiceTest {
         store.accounts.add(account(1, PlatformType.NEWAPI, true));
         List<Object> published = new ArrayList<>();
         CollectionService service = new CollectionService(store, CIPHER, List.of(okClient()), TIME,
-                published::add);
+                published::add, 2);
 
         service.collectAll("MANUAL");
 
