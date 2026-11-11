@@ -6,20 +6,23 @@
 #   - app 不映射端口，只由 web 的 Nginx 反代
 #   - napcat 的 HTTP 与 WebUI 只绑 127.0.0.1，避免 QQ 协议端口暴露
 #   - 所有持久化数据落在 ./data 下
+#
+# 注意：postgres 18+ 镜像要求把卷挂在 /var/lib/postgresql（而不是 /var/lib/postgresql/data），
+# 否则会报 "PostgreSQL data in /var/lib/postgresql/data (unused mount/volume)" 并退出。
 services:
   postgres:
     ports: !reset []
-    volumes:
-      - ./data/postgres:/var/lib/postgresql/data
+    volumes: !override
+      - ./data/postgres:/var/lib/postgresql
 
   redis:
     ports: !reset []
-    volumes:
+    volumes: !override
       - ./data/redis:/data
 
   app:
     ports: !reset []
-    volumes:
+    volumes: !override
       - ./data/logs:/app/logs
     environment:
       JAVA_OPTS: ${RELAY_OPS_JAVA_OPTS:--Xms128m -Xmx512m -XX:MaxRAMPercentage=60 -XX:+UseG1GC}
@@ -32,5 +35,5 @@ services:
     ports:
       - "127.0.0.1:${NAPCAT_HTTP_PORT:-13000}:3000"
       - "127.0.0.1:${NAPCAT_WEBUI_PORT:-6099}:6099"
-    volumes:
+    volumes: !override
       - ./data/napcat:/app/napcat
