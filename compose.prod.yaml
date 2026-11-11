@@ -1,29 +1,32 @@
 # 生产部署覆盖：只暴露控制台，其余端口留在容器网络内。
-# 用法：docker compose -f compose.yaml -f compose.prod.yaml up -d --build
+# 用法：docker compose -f compose.yaml -f compose.prod.yaml up -d
 #
 # 与默认 compose 的差别：
 #   - postgres/redis 不映射到宿主机（数据库不对公网开放）
 #   - app 不映射端口，只由 web 的 Nginx 反代
 #   - napcat 的 HTTP 与 WebUI 只绑 127.0.0.1，避免 QQ 协议端口暴露
-#   - 所有持久化数据落在 ./data 下
+#   - 所有持久化数据落在 RELAY_OPS_DATA_DIR（默认 ../data，即仓库同级的 data 目录）
 #
-# 注意：postgres 18+ 镜像要求把卷挂在 /var/lib/postgresql（而不是 /var/lib/postgresql/data），
-# 否则会报 "PostgreSQL data in /var/lib/postgresql/data (unused mount/volume)" 并退出。
+# 注意：
+#   1. postgres 18+ 镜像要求把卷挂在 /var/lib/postgresql（而不是 /var/lib/postgresql/data），
+#      否则会报 "PostgreSQL data in /var/lib/postgresql/data (unused mount/volume)" 并退出。
+#   2. 相对路径是相对 compose 文件所在目录解析的，因此部署在 /app/relay_ops/src 时
+#      ../data 就是 /app/relay_ops/data。
 services:
   postgres:
     ports: !reset []
     volumes: !override
-      - ./data/postgres:/var/lib/postgresql
+      - ${RELAY_OPS_DATA_DIR:-../data}/postgres:/var/lib/postgresql
 
   redis:
     ports: !reset []
     volumes: !override
-      - ./data/redis:/data
+      - ${RELAY_OPS_DATA_DIR:-../data}/redis:/data
 
   app:
     ports: !reset []
     volumes: !override
-      - ./data/logs:/app/logs
+      - ${RELAY_OPS_DATA_DIR:-../data}/logs:/app/logs
     environment:
       JAVA_OPTS: ${RELAY_OPS_JAVA_OPTS:--Xms128m -Xmx512m -XX:MaxRAMPercentage=60 -XX:+UseG1GC}
 
@@ -36,4 +39,5 @@ services:
       - "127.0.0.1:${NAPCAT_HTTP_PORT:-13000}:3000"
       - "127.0.0.1:${NAPCAT_WEBUI_PORT:-6099}:6099"
     volumes: !override
-      - ./data/napcat:/app/napcat
+      - ${RELAY_OPS_DATA_DIR:-../data}/napcat:/app/napcat
+      - ${RELAY_OPS_DATA_DIR:-../data}/napcat/qq:/app/.config/QQ
