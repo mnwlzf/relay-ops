@@ -12,7 +12,6 @@ RUN npm run build
 FROM maven:3.9-eclipse-temurin-21 AS build
 WORKDIR /workspace
 COPY backend/pom.xml .
-RUN mvn -B -q dependency:go-offline
 COPY backend/src ./src
 # 前端产物直接作为静态资源打进 jar
 COPY --from=web /web/dist ./src/main/resources/static
