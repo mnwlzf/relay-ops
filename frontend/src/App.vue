@@ -1,5 +1,6 @@
 <template>
-  <el-container class="shell">
+  <router-view v-if="route.path === '/login'" />
+  <el-container v-else class="shell">
     <el-aside width="220px" class="aside">
       <div class="brand">
         <strong>RelayOps</strong>
@@ -15,12 +16,17 @@
         <el-menu-item index="/personas">人设与提示词</el-menu-item>
         <el-menu-item index="/blueprints">消息蓝图</el-menu-item>
         <el-menu-item index="/memory">记忆</el-menu-item>
+        <el-menu-item index="/alerts">告警</el-menu-item>
       </el-menu>
     </el-aside>
     <el-container>
       <el-header class="header">
         <span class="title">{{ title }}</span>
-        <span class="hint">本地开发模式：后端需设置 RELAY_OPS_DEV_OPEN_API=true</span>
+        <span class="hint">
+          <template v-if="user">当前账号：{{ user }} · </template>
+          <template v-else>开发模式（未登录） · </template>
+          <el-button v-if="user" size="small" text @click="logout">退出</el-button>
+        </span>
       </el-header>
       <el-main class="main">
         <router-view />
@@ -30,12 +36,35 @@
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue'
-import { useRoute } from 'vue-router'
+import { computed, onMounted, ref } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
+import { api } from './api'
 
 const route = useRoute()
+const router = useRouter()
 const active = computed(() => route.path)
 const title = computed(() => (route.meta.title as string) ?? '')
+const user = ref<string | null>(null)
+
+async function refreshUser() {
+  try {
+    const me: any = await api.authMe()
+    user.value = me?.username ?? null
+  } catch {
+    user.value = null
+  }
+}
+
+async function logout() {
+  try {
+    await api.authLogout()
+  } finally {
+    user.value = null
+    await router.replace('/login')
+  }
+}
+
+onMounted(refreshUser)
 </script>
 
 <style>

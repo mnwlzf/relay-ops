@@ -14,6 +14,14 @@ http.interceptors.response.use(
 )
 
 export const api = {
+  authMe: () => http.get('/auth/me'),
+  authLogin: (username: string, password: string) => http.post('/auth/login', { username, password }),
+  authLogout: () => http.post('/auth/logout'),
+
+  alertHistory: (limit = 50) => http.get('/notification/alerts', { params: { limit } }),
+  silences: () => http.get('/notification/silences'),
+  addSilence: (body: unknown) => http.post('/notification/silences', body),
+  deleteSilence: (id: number) => http.delete('/notification/silences/' + id),
   modelStatus: () => http.get('/assistant/models'),
   lastMessage: () => http.get('/assistant/messages/last'),
 
