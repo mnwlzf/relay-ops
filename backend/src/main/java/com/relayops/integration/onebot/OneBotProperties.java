@@ -16,6 +16,7 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
  * @param alertGroups        comma separated group ids that receive proactive alerts
  * @param maxMessageChars    soft limit per outbound message chunk
  * @param maxSegments        hard cap on chunks per message
+ * @param retryMax           retries per chunk before giving up
  * @param sendInterval       minimum gap between two outbound messages, protects the QQ account
  * @param groupMentionRequired whether to ignore group messages that do not @ the bot
  */
@@ -30,6 +31,7 @@ public record OneBotProperties(
         String alertGroups,
         Integer maxMessageChars,
         Integer maxSegments,
+        Integer retryMax,
         Duration sendInterval,
         Boolean groupMentionRequired,
         Duration timeout
@@ -45,6 +47,7 @@ public record OneBotProperties(
         alertGroups = alertGroups == null ? "" : alertGroups.strip();
         maxMessageChars = maxMessageChars == null || maxMessageChars < 50 ? 1000 : maxMessageChars;
         maxSegments = maxSegments == null || maxSegments < 1 ? 5 : Math.min(maxSegments, 10);
+        retryMax = retryMax == null || retryMax < 0 ? 1 : Math.min(retryMax, 3);
         sendInterval = sendInterval == null || sendInterval.isNegative()
                 ? Duration.ofMillis(500) : sendInterval;
         groupMentionRequired = groupMentionRequired == null || groupMentionRequired;

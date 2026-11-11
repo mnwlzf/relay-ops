@@ -130,6 +130,10 @@ logging:
 # spring.datasource and is the only source used by MyBatis-Plus and Flyway.
 relay-ops:
   timezone: ${RELAY_OPS_TIMEZONE:Asia/Shanghai}
+  identity:
+    # 首次启动且库中无账号时，用这两个变量创建默认管理员；密码留空则不创建
+    admin-username: ${RELAY_OPS_ADMIN_USERNAME:admin}
+    admin-password: ${RELAY_OPS_ADMIN_PASSWORD:}
   security:
     # 仅本地开发用：identity 尚未落地时让前端能直接调 /api/**。生产必须保持 false；
     # 本地联调时在 .env 里设 RELAY_OPS_DEV_OPEN_API=true。
@@ -177,6 +181,8 @@ relay-ops:
     # 长消息分片与发送节流：QQ 对单条长度和发送频率都有限制
     max-message-chars: ${RELAY_OPS_ONEBOT_MAX_MESSAGE_CHARS:1000}
     max-segments: ${RELAY_OPS_ONEBOT_MAX_SEGMENTS:5}
+    # 每片最多重试次数（0 表示不重试）
+    retry-max: ${RELAY_OPS_ONEBOT_RETRY_MAX:1}
     send-interval: ${RELAY_OPS_ONEBOT_SEND_INTERVAL:500ms}
     timeout: ${RELAY_OPS_ONEBOT_TIMEOUT:5s}
   upstream:
