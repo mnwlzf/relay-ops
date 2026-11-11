@@ -40,13 +40,35 @@ public class AuthController {
     public ApiResponse<CurrentUser> login(@RequestBody LoginRequest request,
                                           HttpServletRequest servletRequest,
                                           HttpServletResponse servletResponse) {
-        Authentication authentication = authenticationManager.authenticate(
-                new UsernamePasswordAuthenticationToken(request.username(), request.password()));
+        Authentication authentication;
+        try {
+            authentication = authenticationManager.authenticate(
+                    new UsernamePasswordAuthenticationToken(request.username(), request.password()));
+        } catch (org.springframework.security.core.AuthenticationException ex) {
+            // 认证失败是预期分支，不该冒泡成 500
+            throw new InvalidCredentialsException();
+        }
         SecurityContext context = SecurityContextHolder.createEmptyContext();
         context.setAuthentication(authentication);
         SecurityContextHolder.setContext(context);
         contextRepository.saveContext(context, servletRequest, servletResponse);
         return ApiResponse.of(CurrentUser.of(authentication));
+    }
+
+    /** Signals 401 to the SPA instead of a generic 500. */
+    @org.springframework.web.bind.annotation.ExceptionHandler(InvalidCredentialsException.class)
+    public org.springframework.http.ResponseEntity<com.relayops.shared.web.ErrorResponse> badCredentials(
+            InvalidCredentialsException ex) {
+        return org.springframework.http.ResponseEntity.status(org.springframework.http.HttpStatus.UNAUTHORIZED)
+                .body(com.relayops.shared.web.ErrorResponse.of("AUTH_FAILED", "用户名或密码错误",
+                        java.util.Map.of()));
+    }
+
+    /** Marker exception for failed login. */
+    static final class InvalidCredentialsException extends RuntimeException {
+        InvalidCredentialsException() {
+            super("用户名或密码错误");
+        }
     }
 
     /** Returns the current account; unauthenticated calls get 401 from the entry point. */
