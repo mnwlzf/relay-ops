@@ -101,6 +101,14 @@ public class UpstreamRepository implements UpstreamStore {
     }
 
     @Override
+    public List<UpstreamAccount> accounts() {
+        return jdbc.query("select " + ACCOUNT_COLUMNS + """
+                from upstream_account a join upstream_platform p on p.id = a.platform_id
+                order by a.id
+                """, new MapSqlParameterSource(), accountMapper());
+    }
+
+    @Override
     public void updateAccountStatus(long accountId, Instant at, CollectStatus status, String message) {
         jdbc.update("""
                 update upstream_account

@@ -54,7 +54,7 @@ public class UpstreamController {
     /** Account list; never includes the credential. */
     @GetMapping("/accounts")
     public ApiResponse<List<AccountView>> accounts() {
-        return ApiResponse.of(store.enabledAccounts().stream().map(AccountView::of).toList());
+        return ApiResponse.of(store.accounts().stream().map(AccountView::of).toList());
     }
 
     @PostMapping("/accounts")

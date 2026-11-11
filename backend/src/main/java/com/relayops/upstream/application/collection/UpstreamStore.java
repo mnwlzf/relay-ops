@@ -25,6 +25,9 @@ public interface UpstreamStore {
 
     List<UpstreamAccount> enabledAccounts();
 
+    /** Every account, including those under a disabled platform (console listing). */
+    List<UpstreamAccount> accounts();
+
     void updateAccountStatus(long accountId, Instant at, CollectStatus status, String message);
 
     long insertSnapshot(AccountSnapshot snapshot);
