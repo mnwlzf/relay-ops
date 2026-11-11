@@ -43,6 +43,9 @@ public class SecurityConfig {
                 .authorizeHttpRequests(authorize -> {
                     authorize.requestMatchers(HttpMethod.GET, "/actuator/health", "/actuator/health/**",
                             "/actuator/info").permitAll();
+                    // 一体化镜像：控制台静态资源与 SPA 入口必须匿名可取，否则登录页都打不开
+                    authorize.requestMatchers(HttpMethod.GET, "/", "/index.html", "/favicon.ico",
+                            "/assets/**", "/error").permitAll();
                     authorize.requestMatchers(HttpMethod.POST, "/api/v1/auth/login").permitAll();
                     // OneBot 反向上报带自己的 Bearer token 校验（见 OneBotWebhookController），
                     // 不能要求控制台登录态，否则 NapCat 的 POST 会被拦成 401。

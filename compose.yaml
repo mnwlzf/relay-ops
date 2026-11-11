@@ -35,10 +35,11 @@ services:
       timeout: 3s
       retries: 20
 
-  # 后端应用：一条 docker compose up -d --build 即可起全栈
+  # 后端 + 控制台一体化：一个容器同时提供 API 与静态页面（省内存、少一层反代）
   app:
     build:
-      context: ./backend
+      context: .
+      dockerfile: Dockerfile
     environment:
       # 默认连 local-deps 里的 postgres；用外部库时在 .env 覆盖 RELAY_OPS_DB_URL
       RELAY_OPS_DB_URL: ${RELAY_OPS_DB_URL:-jdbc:postgresql://postgres:5432/relay_ops}
@@ -88,7 +89,7 @@ services:
       DASHSCOPE_API_KEY: ${DASHSCOPE_API_KEY:-}
       JAVA_OPTS: ${RELAY_OPS_JAVA_OPTS:--XX:MaxRAMPercentage=75 -XX:+UseG1GC}
     ports:
-      - "${RELAY_OPS_SERVER_PORT:-8080}:8080"
+      - "${RELAY_OPS_WEB_PORT:-8088}:8080"
     depends_on:
       # required: false —— 用外部数据库/Redis 时这些服务不存在，不该阻止 app 启动
       postgres:
@@ -100,16 +101,6 @@ services:
     extra_hosts:
       # 外部服务跑在宿主机上时可用 host.docker.internal 访问
       - "host.docker.internal:host-gateway"
-    restart: unless-stopped
-
-  # 控制台：Nginx 托管前端静态资源，并把 /api 同源反代到 app
-  web:
-    build:
-      context: ./frontend
-    ports:
-      - "${RELAY_OPS_WEB_PORT:-8088}:80"
-    depends_on:
-      - app
     restart: unless-stopped
 
   # QQ 侧接入：OneBot v11 实现。首次启动需要扫码登录（无法自动化），

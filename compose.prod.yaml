@@ -21,23 +21,22 @@ services:
       - ${RELAY_OPS_DATA_DIR:-../data}/postgres:/var/lib/postgresql
 
   redis:
-    # 外部访问：16379 -> 6379，必须 AUTH（requirepass 由 RELAY_OPS_REDIS_PASSWORD 注入）
+    # 外部访问：16379 -> 6379；账号密码来自 redis.conf（ACL），无认证会被拒绝
     ports: !override
       - "${RELAY_OPS_REDIS_PUBLISH_PORT:-16379}:6379"
-    command: ["redis-server", "--appendonly", "yes", "--requirepass", "${RELAY_OPS_REDIS_PASSWORD:-}"]
+    command: ["redis-server", "/usr/local/etc/redis/redis.conf"]
     volumes: !override
       - ${RELAY_OPS_DATA_DIR:-../data}/redis:/data
+      - ${RELAY_OPS_DATA_DIR:-../data}/redis/redis.conf:/usr/local/etc/redis/redis.conf:ro
 
   app:
-    ports: !reset []
+    # 一体化镜像：8088 -> 容器 8080，API 与控制台同源
+    ports: !override
+      - "${RELAY_OPS_WEB_PORT:-8088}:8080"
     volumes: !override
       - ${RELAY_OPS_DATA_DIR:-../data}/logs:/app/logs
     environment:
       JAVA_OPTS: ${RELAY_OPS_JAVA_OPTS:--Xms128m -Xmx512m -XX:MaxRAMPercentage=60 -XX:+UseG1GC}
-
-  web:
-    ports:
-      - "${RELAY_OPS_WEB_PORT:-8088}:80"
 
   napcat:
     ports:

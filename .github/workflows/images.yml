@@ -1,6 +1,6 @@
 name: images
 
-# 构建后端与控制台镜像并推送到 GHCR。
+# 构建一体化镜像（后端 + 控制台）并推送到 GHCR。
 # 说明：GHCR 包默认私有，VPS 拉取需要 `docker login ghcr.io`（PAT 带 read:packages）
 # 或把包可见性改成 public；没有凭据时请改用 VPS 端 `docker compose up -d --build`。
 on:
@@ -10,6 +10,7 @@ on:
       - 'backend/**'
       - 'frontend/**'
       - 'compose*.yaml'
+      - 'Dockerfile'
       - '.github/workflows/images.yml'
   workflow_dispatch:
 
@@ -21,7 +22,7 @@ env:
   REGISTRY: ghcr.io
 
 jobs:
-  backend:
+  image:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -33,30 +34,11 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
       - uses: docker/build-push-action@v6
         with:
-          context: ./backend
+          context: .
+          file: ./Dockerfile
           push: true
           tags: |
-            ${{ env.REGISTRY }}/${{ github.repository }}-backend:latest
-            ${{ env.REGISTRY }}/${{ github.repository }}-backend:${{ github.sha }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-
-  web:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: docker/setup-buildx-action@v3
-      - uses: docker/login-action@v3
-        with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-      - uses: docker/build-push-action@v6
-        with:
-          context: ./frontend
-          push: true
-          tags: |
-            ${{ env.REGISTRY }}/${{ github.repository }}-web:latest
-            ${{ env.REGISTRY }}/${{ github.repository }}-web:${{ github.sha }}
+            ${{ env.REGISTRY }}/${{ github.repository }}:latest
+            ${{ env.REGISTRY }}/${{ github.repository }}:${{ github.sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
